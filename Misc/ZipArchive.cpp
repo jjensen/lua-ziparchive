@@ -1399,8 +1399,11 @@ bool ZipArchive::FileOpenIndex(size_t index, ZipEntryFileHandle& fileHandle)
 
 	ZipLocalHeader localHeader;
 
-	m_parentFile->Seek(fileEntry.m_offset);
-	m_parentFile->Read(&localHeader, sizeof(ZipLocalHeader));
+	if (m_parentFile->Seek(fileEntry.m_offset) != fileEntry.m_offset)
+		return false;
+
+	if (m_parentFile->Read(&localHeader, sizeof(ZipLocalHeader)) != sizeof(ZipLocalHeader))
+		return false;
 
 #if ZIPARCHIVE_ENCRYPTION
 	fcrypt_ctx headerzcx[1];
