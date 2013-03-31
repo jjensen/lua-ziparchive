@@ -1343,7 +1343,7 @@ bool ZipArchive::FileOpenIndexInternal(size_t index, ZipEntryFileHandle& fileHan
 
 	fileHandle.detail->bufferedData = NULL;
 
-    // Add this virtual file to the open files list.
+	// Add this file entry to the open files list.
 	fileHandle.nextOpenFile = m_headOpenFile;
 	if (m_headOpenFile)
 		m_headOpenFile->prevOpenFile = &fileHandle;
@@ -1354,6 +1354,7 @@ bool ZipArchive::FileOpenIndexInternal(size_t index, ZipEntryFileHandle& fileHan
 } // FileOpenIndexInternal()
 
 
+///////////////////////////////////////////////////////////////////////////////
 /**
 	Opens an existing file entry within the zip archive.
 
