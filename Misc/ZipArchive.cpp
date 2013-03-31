@@ -81,7 +81,7 @@ int PathCreate(const char* inPath)
 #endif
   }
 
-  while ((ch = *inPath++)) {
+  while ((ch = *inPath++) != 0) {
     if (ch == '/'  ||  ch == '\\') {
       char* colonPtr;
       int isDriveLetter;
