@@ -622,7 +622,7 @@ bool ZipArchive::Open(const char* fileName, bool readOnly, uint32_t flags, const
 
 	if (readOnly)
 	{
-		if (!parentFile->Open(fileName, File::MODE_READONLY)) {
+		if (!parentFile->Open(fileName, File::MODE_READONLY | File::SHARE_DENY_WRITE)) {
 			// Couldn't open the file!
 			delete parentFile;
 
@@ -630,7 +630,7 @@ bool ZipArchive::Open(const char* fileName, bool readOnly, uint32_t flags, const
 		}
 	}
 	else if (!parentFile->Open(fileName, File::MODE_READWRITE)) {
-		if (!parentFile->Open(fileName, File::MODE_READONLY)) {
+		if (!parentFile->Open(fileName, File::MODE_READONLY | File::SHARE_DENY_WRITE)) {
 			// Couldn't open the file!
 			delete parentFile;
 
