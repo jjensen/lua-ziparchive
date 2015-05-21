@@ -684,7 +684,10 @@ bool ZipArchive::Open(File& parentFile, const char* filename, bool readOnly, uin
 	// See if it is a .zip file.
 	ZipDirHeader zipDirHeader;
 	m_parentFile->Seek(-(int)sizeof(ZipDirHeader), File::SEEKFLAG_END);
-	m_parentFile->Read(&zipDirHeader, sizeof(ZipDirHeader));
+	if (m_parentFile->Read(&zipDirHeader, sizeof(ZipDirHeader)) != sizeof(ZipDirHeader)) {
+		Close();
+		return false;
+	}
 #if ZIPARCHIVE_ENCRYPTION
 	if (this->defaultPassword.Length() > 0) {
 		zcx[0] = this->defaultzcx[0];
@@ -694,6 +697,7 @@ bool ZipArchive::Open(File& parentFile, const char* filename, bool readOnly, uin
 
 	// Test the zip signature.
 	if (zipDirHeader.signatureBytes[0] != 0x50  ||  zipDirHeader.signatureBytes[1] != 0x4b  ||  zipDirHeader.signatureBytes[2] != 0x05  ||  zipDirHeader.signatureBytes[3] != 0x06) {
+		Close();
 		return false;
 	}
 
@@ -715,7 +719,11 @@ bool ZipArchive::Open(File& parentFile, const char* filename, bool readOnly, uin
 	// TODO: Allocate this up top so it doesn't fragment.
 	uint8_t* zipDirBuffer = new uint8_t[zipDirHeader.size_central_dir];
 	m_parentFile->Seek(zipDirHeader.offset_central_dir);
-	m_parentFile->Read(zipDirBuffer, zipDirHeader.size_central_dir);
+	if (m_parentFile->Read(zipDirBuffer, zipDirHeader.size_central_dir) != zipDirHeader.size_central_dir) {
+		delete[] zipDirBuffer;
+		Close();
+		return false;
+	}
 
 #if ZIPARCHIVE_ENCRYPTION
 	if (this->defaultPassword.Length() > 0) {
