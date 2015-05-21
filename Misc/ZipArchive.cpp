@@ -2213,7 +2213,7 @@ bool ZipArchive::FileCopy(File& srcFile, const char* destFilename, int compressi
 bool ZipArchive::FileCopy(const char* srcFileName, const char* destFileName, int compressionMethod, int compressionLevel, const time_t* inFileTime)
 {
 	DiskFile file;
-    if (!file.Open(srcFileName, File::MODE_READONLY))
+    if (!file.Open(srcFileName, File::MODE_READONLY | File::SHARE_DENY_WRITE))
 		return false;
 
 	time_t fileTime = inFileTime ? *inFileTime : file.GetLastWriteTime();
