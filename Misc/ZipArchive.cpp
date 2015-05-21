@@ -28,12 +28,20 @@
 #if defined(macintosh)  ||  defined(__APPLE__)
 #include <copyfile.h>
 #endif
-#include "List.h"
 #include "Map.h"
 #if ZIPARCHIVE_ENCRYPTION
 #include "aes/fileenc.h"
 #include "aes/prng.h"
 #endif // ZIPARCHIVE_ENCRYPTION
+
+#if defined(_WIN32)
+//#define ZIPARCHIVE_USE_7ZIP_LZMA 1
+#endif
+#if ZIPARCHIVE_USE_7ZIP_LZMA
+#include "lzma/LzmaDec.h"
+#include "lzma/LzmaEnc.h"
+#include "lzma/7zVersion.h"
+#endif // ZIPARCHIVE_USE_7ZIP_LZMA
 
 extern "C"
 {
@@ -41,6 +49,13 @@ extern "C"
 	#include "md5/md5global.h"
 	#include "md5/md5.h"
 }
+
+#if defined(_WIN32)
+#define ZIPARCHIVE_USE_LIBLZMA 1
+#endif
+#if ZIPARCHIVE_USE_LIBLZMA
+#include <lzma.h>
+#endif // ZIPARCHIVE_USE_LIBLZMA
 
 namespace Misc {
 
@@ -215,6 +230,18 @@ struct ZipExtraHeader
 	unsigned short dataSize;
 };
 
+
+struct LzmaPropertiesHeader {
+	uint8_t majorVersion;
+	uint8_t minorVersion;
+	uint16_t propertiesSize;
+#if defined(__GNUC__)  ||  defined(__CWCC__)  ||  defined(__MWERKS__)
+} __attribute__((packed));
+#else
+};
+#endif
+
+
 #if ZIPARCHIVE_MD5_SUPPORT
 
 struct FWKCS_MD5
@@ -259,6 +286,21 @@ static void zlib_free_func(voidpf opaque, voidpf address)
 {
 	delete[] (unsigned char*)address;
 }
+
+
+#if ZIPARCHIVE_USE_7ZIP_LZMA
+
+static void* lzma_alloc_func(void* /*p*/, size_t size) {
+	return new unsigned char[size];
+}
+
+static void lzma_free_func(void* /*p*/, void *address) {
+	delete[] (unsigned char*)address;
+}
+
+static ISzAlloc lzma_memory_funcs = { lzma_alloc_func, lzma_free_func };
+
+#endif // ZIPARCHIVE_USE_7ZIP_LZMA
 
 
 static uint32_t ConvertTime_tToDosTime(time_t time)
@@ -379,6 +421,10 @@ public:
 		: fileEntryIndex(ZipArchive::INVALID_FILE_ENTRY)
 		, bufferedData(NULL)
 		, curUncompressedFilePosition(0)
+#if ZIPARCHIVE_USE_7ZIP_LZMA
+		, lzmaDecodeState(NULL)
+		, lzmaEncodeState(NULL)
+#endif // ZIPARCHIVE_USE_7ZIP_LZMA
 	{
 	}
 
@@ -386,6 +432,7 @@ public:
     size_t headerSize;
     z_stream stream;
     uint8_t* bufferedData;
+	uint32_t bufferedDataSize;
 	uint32_t posInBufferedData;
 	uint64_t curCompressedFilePosition;
 	uint64_t curUncompressedFilePosition;
@@ -395,6 +442,13 @@ public:
 #if ZIPARCHIVE_MD5_SUPPORT
 	MD5_CTX md5writecontext;
 #endif // ZIPARCHIVE_MD5_SUPPORT
+#if ZIPARCHIVE_USE_7ZIP_LZMA
+	CLzmaDec* lzmaDecodeState;
+	CLzmaEncHandle lzmaEncodeState;
+#endif // ZIPARCHIVE_USE_7ZIP_LZMA
+#if ZIPARCHIVE_USE_LIBLZMA
+	lzma_stream lzmaStream;
+#endif // ZIPARCHIVE_USE_LIBLZMA
 };
 
 
@@ -1255,10 +1309,9 @@ bool ZipArchive::FileCreateInternal(const char* fileName, ZipEntryFileHandle& fi
     fileHandle.detail->curUncompressedFilePosition = 0;
     fileHandle.detail->curCompressedFilePosition = 0;
 
-	if (compressionMethod == DEFLATED) {
-		fileHandle.detail->bufferedData = NULL;
-		fileHandle.detail->posInBufferedData = 0;
-	}
+	fileHandle.detail->bufferedData = NULL;
+	fileHandle.detail->bufferedDataSize = 0;
+	fileHandle.detail->posInBufferedData = 0;
 
 	if (fileNameLen == 0)
 		fileNameLen = strlen(fileName);
@@ -1302,6 +1355,7 @@ bool ZipArchive::FileCreate(const char* fileName, ZipEntryFileHandle& fileHandle
 
 	if (compressionMethod == DEFLATED) {
 		fileHandle.detail->bufferedData = new uint8_t[Z_BUFSIZE];
+		fileHandle.detail->bufferedDataSize = 0;
 		fileHandle.detail->posInBufferedData = 0;
 
 		fileHandle.detail->stream.avail_in = 0;
@@ -1314,6 +1368,82 @@ bool ZipArchive::FileCreate(const char* fileName, ZipEntryFileHandle& fileHandle
 		fileHandle.detail->stream.zfree = zlib_free_func;
 
 		deflateInit2(&fileHandle.detail->stream, compressionLevel, compressionMethod == UNCOMPRESSED ? 0 : Z_DEFLATED, -MAX_WBITS, MAX_MEM_LEVEL, 0);
+	} else if (compressionMethod == LZMA) {
+		fileHandle.detail->bufferedData = new uint8_t[Z_BUFSIZE];
+		fileHandle.detail->bufferedDataSize = 0;
+		fileHandle.detail->posInBufferedData = 0;
+
+#if ZIPARCHIVE_USE_7ZIP_LZMA
+ 		fileHandle.detail->lzmaEncodeState = LzmaEnc_Create(&lzma_memory_funcs);
+
+		CLzmaEncProps props;
+		LzmaEncProps_Init(&props);
+		props.dictSize = 64 * 1024;
+		//props.reduceSize = 24434731;
+		props.numThreads = 0;
+		SRes res = LzmaEnc_SetProps(fileHandle.detail->lzmaEncodeState, &props);
+
+		uint8_t header[LZMA_PROPS_SIZE];
+		size_t headerSize = LZMA_PROPS_SIZE;
+		res = LzmaEnc_WriteProperties(fileHandle.detail->lzmaEncodeState, header, &headerSize);
+
+		LzmaPropertiesHeader lzmaPropertiesHeader;
+		lzmaPropertiesHeader.majorVersion = MY_VER_MAJOR;
+		lzmaPropertiesHeader.minorVersion = MY_VER_MINOR;
+		lzmaPropertiesHeader.propertiesSize = LZMA_PROPS_SIZE;
+
+		ZipEntryInfo* fileEntry = GetFileEntry(fileHandle.detail->fileEntryIndex);
+		if (m_parentFile->Seek(fileEntry->m_offset + fileHandle.detail->headerSize + fileHandle.detail->curCompressedFilePosition) !=
+				fileEntry->m_offset + fileHandle.detail->headerSize + fileHandle.detail->curCompressedFilePosition) {
+			return false;
+		}
+
+		if (m_parentFile->Write(&lzmaPropertiesHeader, sizeof(lzmaPropertiesHeader)) != sizeof(lzmaPropertiesHeader)) {
+			return false;
+		}
+
+		if (m_parentFile->Write(header, headerSize) != headerSize) {
+			return false;
+		}
+
+		fileHandle.detail->curCompressedFilePosition = sizeof(LzmaPropertiesHeader) + headerSize;
+#endif // ZIPARCHIVE_USE_7ZIP_LZMA
+
+#if ZIPARCHIVE_USE_LIBLZMA
+		LzmaPropertiesHeader lzmaPropertiesHeader;
+		lzmaPropertiesHeader.majorVersion = LZMA_VERSION_MAJOR;
+		lzmaPropertiesHeader.minorVersion = LZMA_VERSION_MINOR;
+		lzmaPropertiesHeader.propertiesSize = 5;
+
+		ZipEntryInfo* fileEntry = GetFileEntry(fileHandle.detail->fileEntryIndex);
+		if (m_parentFile->Seek(fileEntry->m_offset + fileHandle.detail->headerSize + fileHandle.detail->curCompressedFilePosition) !=
+				fileEntry->m_offset + fileHandle.detail->headerSize + fileHandle.detail->curCompressedFilePosition) {
+			return false;
+		}
+
+		if (m_parentFile->Write(&lzmaPropertiesHeader, sizeof(lzmaPropertiesHeader)) != sizeof(lzmaPropertiesHeader)) {
+			return false;
+		}
+
+		fileHandle.detail->curCompressedFilePosition = sizeof(LzmaPropertiesHeader);
+
+		lzma_options_lzma opt_lzma;
+		lzma_bool retbool;
+		lzma_filter filters[] = {
+			{ LZMA_FILTER_LZMA1, &opt_lzma },
+			{ LZMA_VLI_UNKNOWN, NULL },
+		};
+		memset(&fileHandle.detail->lzmaStream, 0, sizeof(fileHandle.detail->lzmaStream));
+
+		retbool = lzma_lzma_preset(&opt_lzma, LZMA_PRESET_DEFAULT);
+		opt_lzma.dict_size = 256 * 1024;
+
+		lzma_ret ret = lzma_alone_zip_encoder(&fileHandle.detail->lzmaStream, &opt_lzma);
+
+		fileHandle.detail->lzmaStream.avail_out = Z_BUFSIZE;
+		fileHandle.detail->lzmaStream.next_out = fileHandle.detail->bufferedData;
+#endif // ZIPARCHIVE_USE_LIBLZMA
+
 	}
 
 #if ZIPARCHIVE_ENCRYPTION
@@ -1350,6 +1480,7 @@ bool ZipArchive::FileOpenIndexInternal(size_t index, ZipEntryFileHandle& fileHan
     fileHandle.detail->curCompressedFilePosition = 0;
 
 	fileHandle.detail->bufferedData = NULL;
+	fileHandle.detail->bufferedDataSize = 0;
 
 	// Add this file entry to the open files list.
 	fileHandle.nextOpenFile = m_headOpenFile;
@@ -1440,7 +1571,7 @@ bool ZipArchive::FileOpenIndex(size_t index, ZipEntryFileHandle& fileHandle)
 
 	fileHandle.detail->headerSize = sizeof(ZipLocalHeader) + localHeader.size_filename + localHeader.size_file_extra;
 
-	if (fileEntry.m_compressionMethod != 0)
+	if (fileEntry.m_compressionMethod == DEFLATED)
 	{
 
 		fileHandle.detail->stream.avail_in = 0;
@@ -1448,11 +1579,51 @@ bool ZipArchive::FileOpenIndex(size_t index, ZipEntryFileHandle& fileHandle)
 
 	    fileHandle.detail->stream.opaque = 0;
         fileHandle.detail->bufferedData = new uint8_t[Z_BUFSIZE];
+		fileHandle.detail->bufferedDataSize = 0;
+		fileHandle.detail->posInBufferedData = 0;
 		fileHandle.detail->stream.zalloc = zlib_alloc_func;
         fileHandle.detail->stream.zfree = zlib_free_func;
 
 		inflateInit2(&fileHandle.detail->stream, -MAX_WBITS);
     }
+	else if (fileEntry.m_compressionMethod == LZMA) {
+		LzmaPropertiesHeader lzmaPropertiesHeader;
+
+		if (m_parentFile->Seek(fileEntry.m_offset + fileHandle.detail->headerSize + fileHandle.detail->curCompressedFilePosition)
+				!= fileEntry.m_offset + fileHandle.detail->headerSize + fileHandle.detail->curCompressedFilePosition)
+			return false;
+
+		if (m_parentFile->Read(&lzmaPropertiesHeader, sizeof(lzmaPropertiesHeader)) != sizeof(lzmaPropertiesHeader))
+			return false;
+
+		fileHandle.detail->curCompressedFilePosition += sizeof(lzmaPropertiesHeader);
+
+#if ZIPARCHIVE_USE_7ZIP_LZMA
+		uint8_t* header = (uint8_t*)alloca(lzmaPropertiesHeader.propertiesSize);
+		if (m_parentFile->Seek(fileEntry.m_offset + fileHandle.detail->headerSize + fileHandle.detail->curCompressedFilePosition)
+				!= fileEntry.m_offset + fileHandle.detail->headerSize + fileHandle.detail->curCompressedFilePosition)
+			return false;
+
+		if (m_parentFile->Read(header, lzmaPropertiesHeader.propertiesSize) != lzmaPropertiesHeader.propertiesSize)
+			return false;
+
+		fileHandle.detail->curCompressedFilePosition += lzmaPropertiesHeader.propertiesSize;
+
+		fileHandle.detail->lzmaDecodeState = new CLzmaDec;
+		LzmaDec_Construct(fileHandle.detail->lzmaDecodeState);
+		LzmaDec_Allocate(fileHandle.detail->lzmaDecodeState, header, lzmaPropertiesHeader.propertiesSize, &lzma_memory_funcs);
+		LzmaDec_Init(fileHandle.detail->lzmaDecodeState);
+#endif // ZIPARCHIVE_USE_7ZIP_LZMA
+
+#if ZIPARCHIVE_USE_LIBLZMA
+		memset(&fileHandle.detail->lzmaStream, 0, sizeof(fileHandle.detail->lzmaStream));
+		lzma_bool ret = lzma_alone_zip_decoder(&fileHandle.detail->lzmaStream, LZMA_VLI_UNKNOWN, UINT64_MAX);
+#endif // ZIPARCHIVE_USE_LIBLZMA
+
+		fileHandle.detail->bufferedData = new uint8_t[Z_BUFSIZE];
+		fileHandle.detail->bufferedDataSize = 0;
+		fileHandle.detail->posInBufferedData = 0;
+	}
 
 #if ZIPARCHIVE_ENCRYPTION
 	if (this->defaultPassword.Length() > 0)
@@ -1527,7 +1698,52 @@ bool ZipArchive::FileClose(ZipEntryFileHandle& fileHandle)
 			fileEntry->m_uncompressedSize = fileHandle.detail->stream.total_in;
 			fileEntry->m_compressedSize = (uint32_t)fileHandle.detail->curCompressedFilePosition;  //stream.total_out;
 		}
-		else
+		else if (fileEntry->m_compressionMethod == LZMA)
+		{
+#if ZIPARCHIVE_USE_7ZIP_LZMA
+			fileEntry->m_compressedSize = (uint32_t)fileHandle.detail->curCompressedFilePosition;
+			fileEntry->m_uncompressedSize = (uint32_t)fileHandle.detail->curUncompressedFilePosition;
+#endif // ZIPARCHIVE_USE_7ZIP_LZMA
+
+#if ZIPARCHIVE_USE_LIBLZMA
+			lzma_ret ret;
+			do
+			{
+				uint64_t uTotalOutBefore;
+				if (fileHandle.detail->lzmaStream.avail_out == 0)
+				{
+					m_parentFile->Seek(fileHandle.detail->curCompressedFilePosition + fileEntry->m_offset + fileHandle.detail->headerSize);
+#if ZIPARCHIVE_ENCRYPTION
+					if (this->defaultPassword.Length() > 0)
+						fcrypt_encrypt_offset(fileHandle.detail->bufferedData, fileHandle.detail->posInBufferedData, fileHandle.detail->zcx, (unsigned long)fileHandle.detail->curCompressedFilePosition);
+#endif // ZIPARCHIVE_ENCRYPTION
+					m_parentFile->Write(fileHandle.detail->bufferedData, fileHandle.detail->posInBufferedData);
+					fileHandle.detail->curCompressedFilePosition += fileHandle.detail->posInBufferedData;
+					fileHandle.detail->posInBufferedData = 0;
+					fileHandle.detail->lzmaStream.avail_out = (unsigned int)Z_BUFSIZE;
+					fileHandle.detail->lzmaStream.next_out = fileHandle.detail->bufferedData;
+				}
+				uTotalOutBefore = fileHandle.detail->lzmaStream.total_out;
+				ret = lzma_code(&fileHandle.detail->lzmaStream, LZMA_FINISH);
+				fileHandle.detail->posInBufferedData += (unsigned int)(fileHandle.detail->lzmaStream.total_out - uTotalOutBefore);
+			} while (ret == LZMA_OK);
+
+			if (fileHandle.detail->posInBufferedData > 0  &&  (ret == LZMA_OK  ||  ret == LZMA_STREAM_END))
+			{
+				m_parentFile->Seek(fileHandle.detail->curCompressedFilePosition + fileEntry->m_offset + fileHandle.detail->headerSize);
+#if ZIPARCHIVE_ENCRYPTION
+				if (this->defaultPassword.Length() > 0)
+					fcrypt_encrypt_offset(fileHandle.detail->bufferedData, fileHandle.detail->posInBufferedData, fileHandle.detail->zcx, (unsigned long)fileHandle.detail->curCompressedFilePosition);
+#endif // ZIPARCHIVE_ENCRYPTION
+				m_parentFile->Write(fileHandle.detail->bufferedData, fileHandle.detail->posInBufferedData);
+				fileHandle.detail->curCompressedFilePosition += fileHandle.detail->posInBufferedData;
+			}
+
+			fileEntry->m_uncompressedSize = (uint32_t)fileHandle.detail->lzmaStream.total_in;
+			fileEntry->m_compressedSize = (uint32_t)fileHandle.detail->curCompressedFilePosition;  //stream.total_out;
+#endif // ZIPARCHIVE_USE_LIBLZMA
+
+		} else
 		{
 			fileEntry->m_compressedSize = (uint32_t)fileHandle.detail->curCompressedFilePosition;
 			fileEntry->m_uncompressedSize = (uint32_t)fileHandle.detail->curUncompressedFilePosition;
@@ -1615,17 +1831,42 @@ void ZipArchive::FileCloseInternal(ZipEntryFileHandle& fileHandle)
 		// Turn off the current write file.
 		m_curWriteFile = NULL;
 
-    	if (fileEntry->m_compressionMethod == DEFLATED  &&  fileHandle.detail->bufferedData)
-			deflateEnd(&fileHandle.detail->stream);
+		if (fileHandle.detail->bufferedData) {
+			if (fileEntry->m_compressionMethod == DEFLATED) {
+				deflateEnd(&fileHandle.detail->stream);
+			}
+			
+			else if (fileEntry->m_compressionMethod == LZMA) {
+#if ZIPARCHIVE_USE_7ZIP_LZMA
+				LzmaEnc_Destroy(fileHandle.detail->lzmaEncodeState, &lzma_memory_funcs, &lzma_memory_funcs);
+#endif // ZIPARCHIVE_USE_7ZIP_LZMA
+#if ZIPARCHIVE_USE_LIBLZMA
+				lzma_end(&fileHandle.detail->lzmaStream);
+#endif // ZIPARCHIVE_USE_LIBLZMA
+			}
+		}
 	}
     else
     {
-    	if (fileEntry->m_compressionMethod == DEFLATED  &&  fileHandle.detail->bufferedData)
-    		inflateEnd(&fileHandle.detail->stream);
+		if (fileHandle.detail->bufferedData) {
+			if (fileEntry->m_compressionMethod == DEFLATED) {
+				inflateEnd(&fileHandle.detail->stream);
+			}
+			
+			else if (fileEntry->m_compressionMethod == LZMA) {
+#if ZIPARCHIVE_USE_7ZIP_LZMA
+				LzmaDec_Free(fileHandle.detail->lzmaDecodeState, &lzma_memory_funcs);
+#endif // ZIPARCHIVE_USE_7ZIP_LZMA
+#if ZIPARCHIVE_USE_LIBLZMA
+				lzma_end(&fileHandle.detail->lzmaStream);
+#endif // ZIPARCHIVE_USE_LIBLZMA
+			}
+		}
     }
 
     delete[] fileHandle.detail->bufferedData;
     fileHandle.detail->bufferedData = NULL;
+	fileHandle.detail->bufferedDataSize = 0;
 	fileHandle.detail->fileEntryIndex = ZipArchive::INVALID_FILE_ENTRY;
 
 	// Remove the file from the open files list.
@@ -1790,54 +2031,213 @@ uint64_t ZipArchive::FileRead(ZipEntryFileHandle& fileHandle, void* buffer, uint
 		return count;
 	}
 
-    z_stream& stream = fileHandle.detail->stream;
-	stream.next_out = (uint8_t*)buffer;
-	stream.avail_out = (unsigned int)count;
+	uint64_t numRead = 0;
+	if (fileEntry->GetCompressionMethod() == DEFLATED) {
+		z_stream& stream = fileHandle.detail->stream;
+		stream.next_out = (uint8_t*)buffer;
+		stream.avail_out = (unsigned int)count;
 
-	uint64_t rest_read_compressed = fileEntry->m_compressedSize - fileHandle.detail->curCompressedFilePosition;
-    uint64_t numRead = 0;
+		uint64_t rest_read_compressed = fileEntry->m_compressedSize - fileHandle.detail->curCompressedFilePosition;
 
-	while (stream.avail_out > 0)
-	{
-		if (stream.avail_in == 0  &&  rest_read_compressed > 0)
+		while (stream.avail_out > 0)
 		{
-			unsigned int uReadThis = Z_BUFSIZE;
-			if (rest_read_compressed < uReadThis)
-				uReadThis = (unsigned int)rest_read_compressed;
-			if (uReadThis == 0)
+			if (stream.avail_in == 0  &&  rest_read_compressed > 0)
+			{
+				unsigned int uReadThis = Z_BUFSIZE;
+				if (rest_read_compressed < uReadThis)
+					uReadThis = (unsigned int)rest_read_compressed;
+				if (uReadThis == 0)
+					break;
+
+				m_parentFile->Seek(fileHandle.detail->curCompressedFilePosition + fileEntry->m_offset + fileHandle.detail->headerSize);
+				if (m_parentFile->Read(fileHandle.detail->bufferedData, uReadThis) != uReadThis)
+					return numRead;
+
+	#if ZIPARCHIVE_ENCRYPTION
+				if (this->defaultPassword.Length() > 0)
+					fcrypt_decrypt_offset((unsigned char*)fileHandle.detail->bufferedData, (unsigned int)uReadThis, fileHandle.detail->zcx, (unsigned long)fileHandle.detail->curCompressedFilePosition);
+	#endif // ZIPARCHIVE_ENCRYPTION
+
+				fileHandle.detail->curCompressedFilePosition += uReadThis;
+
+				rest_read_compressed -= uReadThis;
+
+				stream.next_in = (uint8_t*)fileHandle.detail->bufferedData;
+				stream.avail_in = (unsigned int)uReadThis;
+			}
+
+			ULONG uTotalOutBefore = stream.total_out;
+
+			int err = inflate(&stream, Z_SYNC_FLUSH);
+
+			size_t bytesInflated = stream.total_out - uTotalOutBefore;
+			fileHandle.detail->curUncompressedFilePosition += bytesInflated;
+			numRead += bytesInflated;
+
+			if (err != Z_OK)
 				break;
-
-			m_parentFile->Seek(fileHandle.detail->curCompressedFilePosition + fileEntry->m_offset + fileHandle.detail->headerSize);
-			if (m_parentFile->Read(fileHandle.detail->bufferedData, uReadThis) != uReadThis)
-				return numRead;
-
-#if ZIPARCHIVE_ENCRYPTION
-			if (this->defaultPassword.Length() > 0)
-				fcrypt_decrypt_offset((unsigned char*)fileHandle.detail->bufferedData, (unsigned int)uReadThis, fileHandle.detail->zcx, (unsigned long)fileHandle.detail->curCompressedFilePosition);
-#endif // ZIPARCHIVE_ENCRYPTION
-
-			fileHandle.detail->curCompressedFilePosition += uReadThis;
-
-			rest_read_compressed -= uReadThis;
-
-			stream.next_in = (uint8_t*)fileHandle.detail->bufferedData;
-			stream.avail_in = (unsigned int)uReadThis;
 		}
+	} else if (fileEntry->GetCompressionMethod() == LZMA) {
+#if ZIPARCHIVE_USE_7ZIP_LZMA
+		CLzmaDec* state = fileHandle.detail->lzmaDecodeState;
 
-		ULONG uTotalOutBefore = stream.total_out;
+		uint64_t rest_read_compressed = fileEntry->m_compressedSize - fileHandle.detail->curCompressedFilePosition;
 
-		int err = inflate(&stream, Z_SYNC_FLUSH);
+		while (numRead != count) {
+			if (fileHandle.detail->bufferedDataSize == 0  &&  rest_read_compressed > 0) {
+				unsigned int uReadThis = Z_BUFSIZE;
+				if (rest_read_compressed < uReadThis)
+					uReadThis = (unsigned int)rest_read_compressed;
+				if (uReadThis == 0)
+					break;
 
-		size_t bytesInflated = stream.total_out - uTotalOutBefore;
-        fileHandle.detail->curUncompressedFilePosition += bytesInflated;
-		numRead += bytesInflated;
+				m_parentFile->Seek(fileHandle.detail->curCompressedFilePosition + fileEntry->m_offset + fileHandle.detail->headerSize);
+				if (m_parentFile->Read(fileHandle.detail->bufferedData, uReadThis) != uReadThis)
+					return numRead;
 
-		if (err != Z_OK)
-			break;
+	#if ZIPARCHIVE_ENCRYPTION
+				if (this->defaultPassword.Length() > 0)
+					fcrypt_decrypt_offset((unsigned char*)fileHandle.detail->bufferedData, (unsigned int)uReadThis, fileHandle.detail->zcx, (unsigned long)fileHandle.detail->curCompressedFilePosition);
+	#endif // ZIPARCHIVE_ENCRYPTION
+
+				fileHandle.detail->curCompressedFilePosition += uReadThis;
+
+				rest_read_compressed -= uReadThis;
+
+				fileHandle.detail->bufferedDataSize = uReadThis;
+				fileHandle.detail->posInBufferedData = 0;
+			}
+
+			ELzmaFinishMode finishMode = LZMA_FINISH_ANY;
+
+			SizeT inProcessed = fileHandle.detail->bufferedDataSize - fileHandle.detail->posInBufferedData;
+			SizeT outProcessed = (SizeT)count - (SizeT)numRead;
+			if (fileHandle.detail->curUncompressedFilePosition + outProcessed >= fileEntry->m_uncompressedSize)
+			{
+				outProcessed = (SizeT)(fileEntry->m_uncompressedSize - fileHandle.detail->curUncompressedFilePosition);
+				finishMode = LZMA_FINISH_END;
+			}
+			ELzmaStatus status;
+			SRes res = LzmaDec_DecodeToBuf(state, (Byte*)buffer + numRead, &outProcessed,
+				fileHandle.detail->bufferedData + fileHandle.detail->posInBufferedData, &inProcessed, finishMode, &status );
+			if (res != SZ_OK)
+				break;
+			numRead += outProcessed;
+			fileHandle.detail->curUncompressedFilePosition += outProcessed;
+			fileHandle.detail->posInBufferedData += inProcessed;
+
+			if (inProcessed == 0  &&  outProcessed == 0)
+			{
+				if (status != LZMA_STATUS_FINISHED_WITH_MARK)
+					break;
+			}
+		}
+#endif // ZIPARCHIVE_USE_7ZIP_LZMA
+
+#if ZIPARCHIVE_USE_LIBLZMA
+		lzma_stream& stream = fileHandle.detail->lzmaStream;
+		stream.next_out = (uint8_t*)buffer;
+		stream.avail_out = (unsigned int)count;
+
+		uint64_t rest_read_compressed = fileEntry->m_compressedSize - fileHandle.detail->curCompressedFilePosition;
+
+		while (stream.avail_out > 0)
+		{
+			if (stream.avail_in == 0  &&  rest_read_compressed > 0)
+			{
+				unsigned int uReadThis = Z_BUFSIZE;
+				if (rest_read_compressed < uReadThis)
+					uReadThis = (unsigned int)rest_read_compressed;
+				if (uReadThis == 0)
+					break;
+
+				m_parentFile->Seek(fileHandle.detail->curCompressedFilePosition + fileEntry->m_offset + fileHandle.detail->headerSize);
+				if (m_parentFile->Read(fileHandle.detail->bufferedData, uReadThis) != uReadThis)
+					return numRead;
+
+	#if ZIPARCHIVE_ENCRYPTION
+				if (this->defaultPassword.Length() > 0)
+					fcrypt_decrypt_offset((unsigned char*)fileHandle.detail->bufferedData, (unsigned int)uReadThis, fileHandle.detail->zcx, (unsigned long)fileHandle.detail->curCompressedFilePosition);
+	#endif // ZIPARCHIVE_ENCRYPTION
+
+				fileHandle.detail->curCompressedFilePosition += uReadThis;
+
+				rest_read_compressed -= uReadThis;
+
+				stream.next_in = (uint8_t*)fileHandle.detail->bufferedData;
+				stream.avail_in = (unsigned int)uReadThis;
+			}
+
+			uint64_t uTotalOutBefore = stream.total_out;
+
+			lzma_ret ret = lzma_code(&stream, LZMA_RUN);
+
+			uint64_t bytesInflated = stream.total_out - uTotalOutBefore;
+			fileHandle.detail->curUncompressedFilePosition += bytesInflated;
+			numRead += bytesInflated;
+
+			if (ret != LZMA_OK)
+				break;
+		}
+#endif // ZIPARCHIVE_USE_LIBLZMA
 	}
 
 	return numRead;
 }
+
+
+#if ZIPARCHIVE_USE_7ZIP_LZMA
+
+struct lzma_FileOutStream
+{
+	ISeqOutStream funcTable;
+	File* file;
+	ZipEntryFileHandle* fileHandle;
+	ZipEntryInfo* fileEntry;
+};
+
+static size_t lzma_FileOutStream_Write(void *pp, const void *data, size_t size)
+{
+	lzma_FileOutStream* stream = (lzma_FileOutStream*)pp;
+	stream->file->Seek(stream->fileHandle->detail->curCompressedFilePosition + stream->fileEntry->GetOffset() + stream->fileHandle->detail->headerSize);
+	if (stream->file->Write(data, size) != size) {
+		return 0;
+	}
+	stream->fileHandle->detail->curCompressedFilePosition += size;
+	return size;
+}
+
+static void lzma_FileOutStream_CreateVTable(lzma_FileOutStream* p)
+{
+	p->funcTable.Write = lzma_FileOutStream_Write;
+}
+
+struct lzma_MemoryInputStream
+{
+	ISeqInStream funcTable;
+	uint8_t* buffer;
+	uint8_t* bufferEnd;
+};
+
+static SRes lzma_MemoryInputStream_Read(void* pp, void* buf, size_t* size)
+{
+	lzma_MemoryInputStream* stream = (lzma_MemoryInputStream*)pp;
+	size_t left = stream->bufferEnd - stream->buffer;
+	if (left < *size)
+		*size = left;
+	if (*size == 0)
+		return SZ_OK;
+	memcpy(buf, stream->buffer, *size);
+	stream->buffer += *size;
+	return SZ_OK;
+}
+
+static void lzma_MemoryInputStream_CreateVTable(lzma_MemoryInputStream* stream)
+{
+	stream->funcTable.Read = lzma_MemoryInputStream_Read;
+}
+
+#endif // ZIPARCHIVE_USE_7ZIP_LZMA
 
 
 uint64_t ZipArchive::FileWrite(ZipEntryFileHandle& fileHandle, const void* buffer, uint64_t count)
@@ -1889,35 +2289,88 @@ uint64_t ZipArchive::FileWrite(ZipEntryFileHandle& fileHandle, const void* buffe
 			fileEntry->m_uncompressedSize = (uint32_t)fileHandle.detail->curUncompressedFilePosition;
 		return count;
 	}
-
-	int err = Z_OK;
-
-    z_stream& stream = fileHandle.detail->stream;
-	stream.next_in = (uint8_t*)buffer;
-	stream.avail_in = (uInt)count;
-
-	while (err == Z_OK  &&  stream.avail_in > 0)
+	else if (fileEntry->m_compressionMethod == DEFLATED)
 	{
-		if (stream.avail_out == 0)
+		int err = Z_OK;
+
+		z_stream& stream = fileHandle.detail->stream;
+		stream.next_in = (uint8_t*)buffer;
+		stream.avail_in = (uInt)count;
+
+		while (err == Z_OK  &&  stream.avail_in > 0)
 		{
-			m_parentFile->Seek(fileHandle.detail->curCompressedFilePosition + fileEntry->m_offset + fileHandle.detail->headerSize);
+			if (stream.avail_out == 0)
+			{
+				m_parentFile->Seek(fileHandle.detail->curCompressedFilePosition + fileEntry->m_offset + fileHandle.detail->headerSize);
 #if ZIPARCHIVE_ENCRYPTION
-			if (this->defaultPassword.Length() > 0)
-				fcrypt_encrypt_offset(fileHandle.detail->bufferedData, fileHandle.detail->posInBufferedData, fileHandle.detail->zcx, (unsigned long)fileHandle.detail->curCompressedFilePosition);
+				if (this->defaultPassword.Length() > 0)
+					fcrypt_encrypt_offset(fileHandle.detail->bufferedData, fileHandle.detail->posInBufferedData, fileHandle.detail->zcx, (unsigned long)fileHandle.detail->curCompressedFilePosition);
 #endif // ZIPARCHIVE_ENCRYPTION
-			m_parentFile->Write(fileHandle.detail->bufferedData, fileHandle.detail->posInBufferedData);
-			fileHandle.detail->curCompressedFilePosition += fileHandle.detail->posInBufferedData;
-			fileHandle.detail->posInBufferedData = 0;
-			stream.avail_out = (unsigned int)Z_BUFSIZE;
-			stream.next_out = fileHandle.detail->bufferedData;
+				m_parentFile->Write(fileHandle.detail->bufferedData, fileHandle.detail->posInBufferedData);
+				fileHandle.detail->curCompressedFilePosition += fileHandle.detail->posInBufferedData;
+				fileHandle.detail->posInBufferedData = 0;
+				stream.avail_out = (unsigned int)Z_BUFSIZE;
+				stream.next_out = fileHandle.detail->bufferedData;
+			}
+
+			ULONG uTotalOutBefore = stream.total_out;
+			err = deflate(&stream, Z_NO_FLUSH);
+			fileHandle.detail->posInBufferedData += (unsigned int)(stream.total_out - uTotalOutBefore);
 		}
 
-		ULONG uTotalOutBefore = stream.total_out;
-		err = deflate(&stream, Z_NO_FLUSH);
-		fileHandle.detail->posInBufferedData += (unsigned int)(stream.total_out - uTotalOutBefore);
+		fileHandle.detail->curUncompressedFilePosition += count;
+	}
+	else if (fileEntry->m_compressionMethod == LZMA)
+	{
+#if ZIPARCHIVE_USE_7ZIP_LZMA
+		lzma_FileOutStream outStream;
+		lzma_FileOutStream_CreateVTable(&outStream);
+		outStream.file = m_parentFile;
+		outStream.fileHandle = &fileHandle;
+		outStream.fileEntry = fileEntry;
+
+		lzma_MemoryInputStream inStream;
+		lzma_MemoryInputStream_CreateVTable(&inStream);
+		inStream.buffer = (uint8_t*)buffer;
+		inStream.bufferEnd = (uint8_t*)buffer + count;
+
+		SRes res = LzmaEnc_Encode(fileHandle.detail->lzmaEncodeState, &outStream.funcTable, &inStream.funcTable, NULL, &lzma_memory_funcs, &lzma_memory_funcs);
+
+		fileHandle.detail->curUncompressedFilePosition += count;
+#endif // ZIPARCHIVE_USE_7ZIP_LZMA
+
+#if ZIPARCHIVE_USE_LIBLZMA
+		lzma_ret ret = LZMA_OK;
+
+		lzma_stream& stream = fileHandle.detail->lzmaStream;
+		stream.next_in = (uint8_t*)buffer;
+		stream.avail_in = (uInt)count;
+
+		while (ret == LZMA_OK  &&  stream.avail_in > 0)
+		{
+			if (stream.avail_out == 0)
+			{
+				m_parentFile->Seek(fileHandle.detail->curCompressedFilePosition + fileEntry->m_offset + fileHandle.detail->headerSize);
+#if ZIPARCHIVE_ENCRYPTION
+				if (this->defaultPassword.Length() > 0)
+					fcrypt_encrypt_offset(fileHandle.detail->bufferedData, fileHandle.detail->posInBufferedData, fileHandle.detail->zcx, (unsigned long)fileHandle.detail->curCompressedFilePosition);
+#endif // ZIPARCHIVE_ENCRYPTION
+				m_parentFile->Write(fileHandle.detail->bufferedData, fileHandle.detail->posInBufferedData);
+				fileHandle.detail->curCompressedFilePosition += fileHandle.detail->posInBufferedData;
+				fileHandle.detail->posInBufferedData = 0;
+				stream.avail_out = (unsigned int)Z_BUFSIZE;
+				stream.next_out = fileHandle.detail->bufferedData;
+			}
+
+			uint64_t uTotalOutBefore = stream.total_out;
+			ret = lzma_code(&stream, LZMA_RUN);
+			fileHandle.detail->posInBufferedData += (unsigned int)(stream.total_out - uTotalOutBefore);
+		}
+
+		fileHandle.detail->curUncompressedFilePosition += count;
+#endif // ZIPARCHIVE_USE_LIBLZMA
 	}
 
-    fileHandle.detail->curUncompressedFilePosition += count;
     return count;
 }
 

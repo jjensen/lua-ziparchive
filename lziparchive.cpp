@@ -1395,6 +1395,7 @@ int LS_Help(lua_State* L)
 "\n"
 "    ziparchive.UNCOMPRESSED\n"
 "    ziparchive.DEFLATED\n"
+"    ziparchive.LZMA\n"
 "\n"
 "CompressionLevel Enumerations:\n"
 "\n"
@@ -1562,6 +1563,8 @@ extern "C" int luaopen_ziparchive(lua_State* L)
 	lua_setfield(L, -2, "UNCOMPRESSED");
 	lua_pushnumber(L, ZipArchive::DEFLATED);
 	lua_setfield(L, -2, "DEFLATED");
+	lua_pushnumber(L, ZipArchive::LZMA);
+	lua_setfield(L, -2, "LZMA");
 
 	lua_pushnumber(L, Z_NO_COMPRESSION);
 	lua_setfield(L, -2, "NO_COMPRESSION");
