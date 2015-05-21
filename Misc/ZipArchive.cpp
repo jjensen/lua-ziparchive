@@ -2478,6 +2478,15 @@ size_t ZipArchive::FindFileEntryIndex(const char* fileName)
 	if (!node)
 		return INVALID_FILE_ENTRY;
 	return this->fileNameMap.Value(node);
+/*
+	for (size_t index = 0; index < m_fileEntryCount; ++index) {
+		ZipEntryInfo* entryInfo = (ZipEntryInfo*)(m_fileEntries + m_fileEntryOffsets[index]);
+		if (strcmp(entryInfo->GetFilename(), fileName) == 0) {
+			return index;
+		}
+	}
+	return INVALID_FILE_ENTRY;
+*/
 } // FindFileEntryIndex
 
 
