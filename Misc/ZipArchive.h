@@ -118,7 +118,7 @@ public:
 			, compressionLevel(Z_DEFAULT_COMPRESSION)
 			, sourceArchive(NULL)
 			, fileTime(0)
-			, size(0)
+			, size((size_t)-1)
 			, crc(0)
 			, lastWriteTime(0)
 			, needUpdate(false)
@@ -136,7 +136,7 @@ public:
 			, compressionMethod(_compressionMethod)
 			, compressionLevel(_compressionLevel)
 			, fileTime(0)
-			, size(0)
+			, size((size_t)-1)
 			, crc(0)
 			, lastWriteTime(0)
 			, needUpdate(false)
@@ -148,6 +148,7 @@ public:
 
         HeapString entryName;
         HeapString srcPath;
+		HeapString sourceEntryName;
 		ZipArchive* sourceArchive;
 		int compressionMethod;
 		int compressionLevel;

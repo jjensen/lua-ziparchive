@@ -2158,14 +2158,20 @@ bool ZipArchive::FileCopy(File& srcFile, const char* destFilename, int compressi
 	if (!FileCreate(destFilename, destFileHandle, compressionMethod, compressionLevel, fileTime))
 		return false;
 
-	// Operate in 64k buffers.
-	const unsigned int BUFFER_SIZE = 64 * 1024;
+	// Get the source file's size.
+	unsigned int fileSize = (unsigned int)(srcFile.GetLength() - srcFile.GetPosition());
+
+	// Operate in an appropriate buffer size for the compressor.
+	unsigned int BUFFER_SIZE;
+	switch (compressionMethod)
+	{
+		default:
+			BUFFER_SIZE = 64 * 1024;
+			break;
+	}
 
 	// Allocate the buffer space.
 	uint8_t* buffer = new uint8_t[BUFFER_SIZE];
-
-	// Get the source file's size.
-	unsigned int fileSize = (unsigned int)(srcFile.GetLength() - srcFile.GetPosition());
 
 	// Keep copying until there is no more file left to copy.
 	bool ret = true;
@@ -2882,17 +2888,24 @@ bool ZipArchive::ProcessFileList(ZipArchive::FileOrderList& fileOrderList, Proce
 		// with a pipe symbol.  The zip archive path precedes the pipe symbol.  The zip entry
 		// filename follows the pipe.
 		int pipePos = fileOrderInfo.srcPath.ReverseFind('|');
-		if (pipePos != -1) {
-			HeapString archiveFileName = fileOrderInfo.srcPath.Sub(0, pipePos);
-			HeapString entryName = fileOrderInfo.srcPath.Sub(pipePos + 1);
+		if (pipePos != -1  ||  fileOrderInfo.sourceEntryName.IsNotEmpty()) {
+			HeapString archiveFileName;
+			HeapString entryName;
+			if (fileOrderInfo.sourceEntryName.IsNotEmpty()) {
+				archiveFileName = fileOrderInfo.srcPath;
+				entryName = fileOrderInfo.sourceEntryName;
+			} else {
+				archiveFileName = fileOrderInfo.srcPath.Sub(0, pipePos);
+				entryName = fileOrderInfo.srcPath.Sub(pipePos + 1);
+			}
 			ZipEntryInfo* openArchiveFileEntry = NULL;
 
-			if (fileOrderInfo.fileTime == 0  ||  fileOrderInfo.size == 0  ||  fileOrderInfo.crc == 0
+			if (fileOrderInfo.fileTime == 0  ||  fileOrderInfo.size == (size_t)-1  //  ||  fileOrderInfo.crc == 0
 #if ZIPARCHIVE_MD5_SUPPORT
 					|| memcmp(fileOrderInfo.md5, emptyMD5, sizeof(emptyMD5)) == 0
 #endif // ZIPARCHIVE_MD5_SUPPORT
 				) {
-				ZipArchive* openArchive = fileOrderInfo.sourceArchive ? fileOrderInfo.sourceArchive : PFL_OpenArchive(archiveFileName, openArchives, m_flags);
+				ZipArchive* openArchive = fileOrderInfo.sourceArchive ? fileOrderInfo.sourceArchive : PFL_OpenArchive(archiveFileName, openArchives, SUPPORT_MD5);
 				openArchiveFileEntry = openArchive->FindFileEntry(entryName);
 			}
 
@@ -2904,7 +2917,7 @@ bool ZipArchive::ProcessFileList(ZipArchive::FileOrderList& fileOrderList, Proce
 			} else
 				fileOrderInfo.lastWriteTime = fileOrderInfo.fileTime;
 
-			if (fileOrderInfo.size == 0) {
+			if (fileOrderInfo.size == (size_t)-1) {
 				if (openArchiveFileEntry) {
 					fileOrderInfo.size = openArchiveFileEntry->GetUncompressedSize();
 				}
@@ -3070,6 +3083,11 @@ bool ZipArchive::ProcessFileList(ZipArchive::FileOrderList& fileOrderList, Proce
 		// If the entry wasn't found, no further comparisons are necessary.  Just
 		// look for the next file order filename.
 		if (entryIndex == INVALID_FILE_ENTRY) {
+			archiveFileEntryMap.Remove(info->entryName);
+
+			if (options->checkOnly)
+				return true;
+
 			needsUpdate = true;
 			continue;
 		}
