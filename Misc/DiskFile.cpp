@@ -1,6 +1,10 @@
 #include "Misc_InternalPch.h"
 #include "DiskFile.h"
 
+#if USE_SDL
+#include <SDL.h>
+#include <SDL_rwops.h>
+#else
 #if defined(PLATFORM_WINDOWS)
 #include <windows.h>
 #undef GetClassInfo
@@ -13,16 +17,21 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #endif
+#endif // USE_SDL
 
 namespace Misc {
 
 DiskFile::DiskFile()
 	: m_fileName(NULL)
+#if USE_SDL
+	, m_fileHandle(NULL)
+#else
 #if defined(PLATFORM_WINDOWS)
     , m_fileHandle(INVALID_HANDLE_VALUE)
 #else
 	, m_fileHandle(-1)
 #endif
+#endif // USE_SDL
 {
 }
 
@@ -35,7 +44,9 @@ DiskFile::~DiskFile()
 
 ULONGLONG DiskFile::GetPosition() const
 {
-#if defined(PLATFORM_WINDOWS)
+#if USE_SDL
+	return SDL_RWtell((struct SDL_RWops*)m_fileHandle);
+#elif defined(PLATFORM_WINDOWS)
 	LARGE_INTEGER liPos;
 	liPos.QuadPart = 0;
 	liPos.LowPart = ::SetFilePointer(m_fileHandle, liPos.LowPart, &liPos.HighPart, FILE_CURRENT);
@@ -51,7 +62,9 @@ ULONGLONG DiskFile::GetPosition() const
 
 void DiskFile::SetLength(ULONGLONG newSize)
 {
-#if defined(PLATFORM_WINDOWS)
+#if USE_SDL
+	CORE_ASSERT(0);
+#elif defined(PLATFORM_WINDOWS)
 	Seek(newSize, SEEKFLAG_BEGIN);
     ::SetEndOfFile(m_fileHandle);
 #else
@@ -62,7 +75,9 @@ void DiskFile::SetLength(ULONGLONG newSize)
 
 ULONGLONG DiskFile::GetLength(void) const
 {
-#if defined(PLATFORM_WINDOWS)
+#if USE_SDL
+	return SDL_RWsize((SDL_RWops*)m_fileHandle);
+#elif defined(PLATFORM_WINDOWS)
 	ULARGE_INTEGER fileSize;
 	fileSize.LowPart = ::GetFileSize(m_fileHandle, &fileSize.HighPart);
 	return fileSize.QuadPart;
@@ -84,7 +99,34 @@ bool DiskFile::Open(const char* fileName, UINT openFlags)
 	m_fileName = new char[fileNameLen + 1];
     strncpy(m_fileName, fileName, fileNameLen + 1);
 
-#if defined(PLATFORM_WINDOWS)
+#if USE_SDL
+	const char* mode;
+	int flags = 0;
+	if ((openFlags & MODE_READWRITE) == MODE_READWRITE)
+	{
+		mode = "r+";
+	}
+	else
+	{
+		if (openFlags & MODE_READONLY)
+			mode = "r";
+		if (openFlags & MODE_WRITEONLY)
+			mode = "r+";
+	}
+
+	if (openFlags & MODE_CREATE)
+	{
+		mode = "w+";
+//        if (openFlags & MODE_TRUNCATE)
+//			flags |= O_TRUNC;
+	}
+
+	m_fileHandle = SDL_RWFromFile(fileName, mode);
+	if (!m_fileHandle)
+	{
+		return false;
+	}
+#elif defined(PLATFORM_WINDOWS)
     DWORD dwDesiredAccess = 0;
     if (openFlags & MODE_READONLY)
         dwDesiredAccess |= GENERIC_READ;
@@ -148,7 +190,13 @@ bool DiskFile::Open(const char* fileName, UINT openFlags)
 
 void DiskFile::Close()
 {
-#if defined(PLATFORM_WINDOWS)
+#if USE_SDL
+	if (m_fileHandle)
+	{
+		SDL_RWclose((SDL_RWops*)m_fileHandle);
+		m_fileHandle = NULL;
+	}
+#elif defined(PLATFORM_WINDOWS)
     if (m_fileHandle != INVALID_HANDLE_VALUE)
     {
         ::CloseHandle(m_fileHandle);
@@ -169,7 +217,24 @@ void DiskFile::Close()
 
 LONGLONG DiskFile::Seek(LONGLONG offset, SeekFlags seekFlags)
 {
-#if defined(PLATFORM_WINDOWS)
+#if USE_SDL
+	int moveMethod = RW_SEEK_SET;
+	switch (seekFlags)
+	{
+		case SEEKFLAG_BEGIN:
+			if (GetPosition() == offset)
+			{
+				return offset;
+			}
+			moveMethod = RW_SEEK_SET;
+			break;
+		case SEEKFLAG_CURRENT:	moveMethod = RW_SEEK_CUR;		break;
+		case SEEKFLAG_END:		moveMethod = RW_SEEK_END;		break;
+	}
+
+	return SDL_RWseek((SDL_RWops*)m_fileHandle, offset, moveMethod);
+
+#elif defined(PLATFORM_WINDOWS)
 	DWORD moveMethod = FILE_BEGIN;
 	switch (seekFlags)
 	{
@@ -203,7 +268,10 @@ LONGLONG DiskFile::Seek(LONGLONG offset, SeekFlags seekFlags)
 
 ULONGLONG DiskFile::Read(void* buffer, ULONGLONG count)
 {
-#if defined(PLATFORM_WINDOWS)
+#if USE_SDL
+	return SDL_RWread((SDL_RWops*)m_fileHandle, buffer, 1, (size_t)count);
+
+#elif defined(PLATFORM_WINDOWS)
     DWORD bytesRead = 0;
     ::ReadFile(m_fileHandle, buffer, (DWORD)count, &bytesRead, NULL);
     return bytesRead;
@@ -215,7 +283,10 @@ ULONGLONG DiskFile::Read(void* buffer, ULONGLONG count)
 
 ULONGLONG DiskFile::Write(const void* buffer, ULONGLONG count)
 {
-#if defined(PLATFORM_WINDOWS)
+#if USE_SDL
+	return SDL_RWwrite((SDL_RWops*)m_fileHandle, buffer, 1, (size_t)count);
+
+#elif defined(PLATFORM_WINDOWS)
     DWORD bytesWritten = 0;
     ::WriteFile(m_fileHandle, buffer, (DWORD)count, &bytesWritten, NULL);
     return bytesWritten;
@@ -232,7 +303,11 @@ extern time_t ConvertFILETIME_To_time_t(const FILETIME& fileTime);
 
 time_t DiskFile::GetLastWriteTime()
 {
-#if defined(PLATFORM_WINDOWS)
+#if USE_SDL
+	CORE_ASSERT(0);
+	return 0;
+
+#elif defined(PLATFORM_WINDOWS)
 	FILETIME ftLastWrite;
 	if ( !::GetFileTime(m_fileHandle, NULL, NULL, &ftLastWrite) )
 		return 0;
@@ -254,7 +329,10 @@ BOOL (WINAPI *fnTzSpecificLocalTimeToSystemTime)(LPTIME_ZONE_INFORMATION lpTimeZ
 
 void DiskFile::SetLastWriteTime(time_t lastWriteTime)
 {
-#if defined(PLATFORM_WINDOWS)
+#if USE_SDL
+	CORE_ASSERT(0);
+
+#elif defined(PLATFORM_WINDOWS)
 #if _MSC_VER  &&  _MSC_VER <= 1300
 	assert(0);
 #else
@@ -268,11 +346,6 @@ void DiskFile::SetLastWriteTime(time_t lastWriteTime)
 
 	SYSTEMTIME universalSystemTime;
 
-	if (CheckFor98Mill())
-	{
-		CORE_ASSERT(0);
-	}
-	else
 	{
 		if (!fnTzSpecificLocalTimeToSystemTime)
 		{
@@ -297,8 +370,14 @@ void DiskFile::SetLastWriteTime(time_t lastWriteTime)
 	tv[0].tv_usec = 0;
 	tv[1].tv_sec = lastWriteTime;
 	tv[1].tv_usec = 0;
+#if defined(PLATFORM_ANDROID)
+	CORE_ASSERT(0);
+	//if (futimens(m_fileHandle, (const timeval*)&tv) != 0)
+		//return;
+#else
 	if (futimes(m_fileHandle, (const timeval*)&tv) != 0)
 		return;
+#endif
 #endif
 
 }

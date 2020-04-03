@@ -317,11 +317,18 @@ private:
 	size_t  m_fileEntryMaxCount;
     uint64_t m_dirOffset;
 	uint64_t m_dirSize;			// Directory size in bytes.
-	unsigned int    m_needsPack:1;
-	unsigned int	m_readOnly:1;
-	unsigned int	m_changed:1;							//!< Whether the file needs to be flushed.
-	unsigned int	m_swap:1;
-	unsigned int	m_unused:28;
+	union
+	{
+		struct
+		{
+			unsigned int    m_needsPack:1;
+			unsigned int	m_readOnly:1;
+			unsigned int	m_changed:1;							//!< Whether the file needs to be flushed.
+			unsigned int	m_swap:1;
+			unsigned int	m_unused:28;
+		};
+		unsigned int m_stuff;
+	};
 
     char* m_filename;
     size_t* m_fileEntryOffsets;

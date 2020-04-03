@@ -4,6 +4,7 @@
 #include "TypeTraits.h"
 #include "HeapAllocator.h"
 #include <assert.h>
+#include <stdlib.h>
 
 namespace Misc {
 
@@ -98,10 +99,10 @@ public:
 	OUTARGTYPE Item(size_t index)						{  assert(index < m_count);  return m_items[index];  }
 	CONSTOUTARGTYPE operator[](size_t index) const
 	{
-		if (index >= m_count)
+/*		if (index >= m_count)
 		{
 			int hi = 5; (void)hi;
-		}
+		}*/
 		assert(index < m_count);
 		return m_items[index];
 	}

@@ -1,28 +1,21 @@
 /*
- ---------------------------------------------------------------------------
- Copyright (c) 1998-2008, Brian Gladman, Worcester, UK. All rights reserved.
+---------------------------------------------------------------------------
+Copyright (c) 1998-2013, Brian Gladman, Worcester, UK. All rights reserved.
 
- LICENSE TERMS
+The redistribution and use of this software (with or without changes)
+is allowed without the payment of fees or royalties provided that:
 
- The redistribution and use of this software (with or without changes)
- is allowed without the payment of fees or royalties provided that:
+  source code distributions include the above copyright notice, this
+  list of conditions and the following disclaimer;
 
-  1. source code distributions include the above copyright notice, this
-     list of conditions and the following disclaimer;
+  binary distributions include the above copyright notice, this list
+  of conditions and the following disclaimer in their documentation.
 
-  2. binary distributions include the above copyright notice, this list
-     of conditions and the following disclaimer in their documentation;
-
-  3. the name of the copyright holder is not used to endorse products
-     built using this software without specific written permission.
-
- DISCLAIMER
-
- This software is provided 'as is' with no explicit or implied warranties
- in respect of its properties, including, but not limited to, correctness
- and/or fitness for purpose.
- ---------------------------------------------------------------------------
- Issue Date: 20/12/2007
+This software is provided 'as is' with no explicit or implied warranties
+in respect of its operation, including, but not limited to, correctness
+and fitness for purpose.
+---------------------------------------------------------------------------
+Issue Date: 20/12/2007
 
  This file contains the definitions required to use AES in C. See aesopt.h
  for optimisation details.
@@ -51,7 +44,6 @@ extern "C"
 
 #define AES_ENCRYPT /* if support for encryption is needed          */
 #define AES_DECRYPT /* if support for decryption is needed          */
-#define AES_REV_DKS /* define to reverse decryption key schedule    */
 
 #define AES_BLOCK_SIZE  16  /* the AES block size in bytes          */
 #define N_COLS           4  /* the number of columns in the state   */
@@ -76,19 +68,41 @@ extern "C"
 /* elements can be used by code that implements additional modes    */
 
 typedef union
-{   uint_32t l;
-    uint_8t b[4];
+{   uint32_t l;
+    uint8_t b[4];
 } aes_inf;
 
+#ifdef _MSC_VER
+#  pragma warning( disable : 4324 )
+#endif
+
+#ifdef _WIN64
+__declspec(align(16))
+#endif
+#if defined(__GNUC__) || defined(__clang__) 
+typedef struct __attribute__((aligned(16)))
+#else
 typedef struct
-{   uint_32t ks[KS_LENGTH];
+#endif
+{   uint32_t ks[KS_LENGTH];
     aes_inf inf;
 } aes_encrypt_ctx;
 
+#ifdef _WIN64
+__declspec(align(16))
+#endif
+#if defined(__GNUC__) || defined(__clang__) 
+typedef struct __attribute__((aligned(16)))
+#else
 typedef struct
-{   uint_32t ks[KS_LENGTH];
+#endif
+{   uint32_t ks[KS_LENGTH];
     aes_inf inf;
 } aes_decrypt_ctx;
+
+#ifdef _MSC_VER
+#  pragma warning( default : 4324 )
+#endif
 
 /* This routine must be called before first use if non-static       */
 /* tables are being used                                            */
@@ -146,7 +160,7 @@ AES_RETURN aes_decrypt(const unsigned char *in, unsigned char *out, const aes_de
 
 /* Multiple calls to the following subroutines for multiple block   */
 /* ECB, CBC, CFB, OFB and CTR mode encryption can be used to handle */
-/* long messages incremantally provided that the context AND the iv */
+/* long messages incrementally provided that the context AND the iv */
 /* are preserved between all such calls.  For the ECB and CBC modes */
 /* each individual call within a series of incremental calls must   */
 /* process only full blocks (i.e. len must be a multiple of 16) but */
@@ -196,6 +210,63 @@ typedef void cbuf_inc(unsigned char *cbuf);
 AES_RETURN aes_ctr_crypt(const unsigned char *ibuf, unsigned char *obuf,
             int len, unsigned char *cbuf, cbuf_inc ctr_inc, aes_encrypt_ctx cx[1]);
 
+#endif
+
+#if 0
+#  define ADD_AESNI_MODE_CALLS
+#endif
+
+#if 0 && defined( ADD_AESNI_MODE_CALLS )
+#  define USE_AES_CONTEXT
+#endif
+
+#ifdef ADD_AESNI_MODE_CALLS
+#  ifdef USE_AES_CONTEXT
+
+AES_RETURN aes_CBC_encrypt(const unsigned char *in,
+    unsigned char *out,
+    unsigned char ivec[16],
+    unsigned long length,
+    const aes_encrypt_ctx cx[1]);
+
+AES_RETURN aes_CBC_decrypt(const unsigned char *in,
+    unsigned char *out,
+    unsigned char ivec[16],
+    unsigned long length,
+    const aes_decrypt_ctx cx[1]);
+
+AES_RETURN AES_CTR_encrypt(const unsigned char *in,
+    unsigned char *out,
+    const unsigned char ivec[8],
+    const unsigned char nonce[4],
+    unsigned long length,
+    const aes_encrypt_ctx cx[1]);
+
+#  else
+
+void aes_CBC_encrypt(const unsigned char *in,
+    unsigned char *out,
+    unsigned char ivec[16],
+    unsigned long length,
+    unsigned char *key,
+    int number_of_rounds);
+
+void aes_CBC_decrypt(const unsigned char *in,
+    unsigned char *out,
+    unsigned char ivec[16],
+    unsigned long length,
+    unsigned char *key,
+    int number_of_rounds);
+
+void AES_CTR_encrypt(const unsigned char *in,
+    unsigned char *out,
+    const unsigned char ivec[8],
+    const unsigned char nonce[4],
+    unsigned long length,
+    const unsigned char *key,
+    int number_of_rounds);
+
+#  endif
 #endif
 
 #if defined(__cplusplus)

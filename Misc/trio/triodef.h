@@ -1,6 +1,6 @@
 /*************************************************************************
  *
- * $Id: triodef.h,v 1.32 2007/04/17 19:23:05 breese Exp $
+ * $Id: triodef.h,v 1.36 2010/09/12 11:08:08 breese Exp $
  *
  * Copyright (C) 2001 Bjorn Reese <breese@users.sourceforge.net>
  *
@@ -150,7 +150,7 @@ typedef unsigned short wchar;
 
 #if defined(__STDC__) \
  || defined(_MSC_EXTENSIONS) \
- || defined(TRIO_COMPILER_BORLAND)
+ || defined(TRIO_COMPILER_BCB)
 # define PREDEF_STANDARD_C89
 #endif
 #if defined(__STDC_VERSION__)
@@ -233,6 +233,8 @@ typedef char * trio_pointer_t;
 # define TRIO_ARGS4(list,a1,a2,a3,a4) list a1; a2; a3; a4;
 # define TRIO_ARGS5(list,a1,a2,a3,a4,a5) list a1; a2; a3; a4; a5;
 # define TRIO_ARGS6(list,a1,a2,a3,a4,a5,a6) list a1; a2; a3; a4; a5; a6;
+# define TRIO_ARGS7(list,a1,a2,a3,a4,a5,a6,a7) list a1; a2; a3; a4; a5; a6; a7;
+# define TRIO_ARGS8(list,a1,a2,a3,a4,a5,a6,a7,a8) list a1; a2; a3; a4; a5; a6; a7; a8;
 # define TRIO_VARGS2(list,a1,a2) list a1; a2
 # define TRIO_VARGS3(list,a1,a2,a3) list a1; a2; a3
 # define TRIO_VARGS4(list,a1,a2,a3,a4) list a1; a2; a3; a4
@@ -255,6 +257,8 @@ typedef void * trio_pointer_t;
 # define TRIO_ARGS4(list,a1,a2,a3,a4) (a1,a2,a3,a4)
 # define TRIO_ARGS5(list,a1,a2,a3,a4,a5) (a1,a2,a3,a4,a5)
 # define TRIO_ARGS6(list,a1,a2,a3,a4,a5,a6) (a1,a2,a3,a4,a5,a6)
+# define TRIO_ARGS7(list,a1,a2,a3,a4,a5,a6,a7) (a1,a2,a3,a4,a5,a6,a7)
+# define TRIO_ARGS8(list,a1,a2,a3,a4,a5,a6,a7,a8) (a1,a2,a3,a4,a5,a6,a7,a8)
 # define TRIO_VARGS2 TRIO_ARGS2
 # define TRIO_VARGS3 TRIO_ARGS3
 # define TRIO_VARGS4 TRIO_ARGS4
@@ -311,8 +315,25 @@ typedef void * trio_pointer_t;
 # define TRIO_COMPILER_SUPPORTS_LL
 #endif
 
-#define TRIO_SNPRINTF_ONLY
-#define TRIO_FUNC_TO_LONG
-#define TRIO_FUNC_LENGTH
+#if defined(__CYGWIN__)
+/*
+ * Cygwin defines the macros for hosted C99, but does not support certain
+ * long double math functions.
+ */
+# include <cygwin/version.h>
+# define TRIO_CYGWIN_VERSION_API CYGWIN_VERSION_API_MAJOR * 1000 + \
+   CYGWIN_VERSION_API_MINOR
+/*
+ * Please change the version number below when the Cygwin API supports
+ * long double math functions (powl, fmodl, etc.)
+ */
+# if TRIO_CYGWIN_VERSION_API < 99999999
+#  define TRIO_NO_FLOORL 1
+#  define TRIO_NO_CEILL 1
+#  define TRIO_NO_POWL 1
+#  define TRIO_NO_FMODL 1
+#  define TRIO_NO_LOG10L 1
+# endif
+#endif
 
 #endif /* TRIO_TRIODEF_H */

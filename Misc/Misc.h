@@ -2,16 +2,22 @@
 #define MISC_H
 
 #include <assert.h>
+#include <stdint.h>
 #include <new>
 
 #if defined(_WIN32)
 #define PLATFORM_WINDOWS
 #define MISC_CDECL __cdecl
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && _MSC_VER < 1300
 #include "stdint.vc.h"
 #endif
 #elif defined(macintosh)  ||  defined(__APPLE__)
+#if !defined(PLATFORM_IOS)
 #define PLATFORM_MAC
+#endif
+#define MISC_CDECL
+#elif defined(__ANDROID__)
+#define PLATFORM_ANDROID
 #define MISC_CDECL
 #elif defined(linux)
 #define PLATFORM_LINUX
@@ -21,14 +27,14 @@
 typedef unsigned char BYTE;
 typedef unsigned short WORD;
 typedef unsigned int UINT;
-typedef unsigned long DWORD;
-typedef long LONG;
-typedef unsigned long ULONG;
 
 #if defined(PLATFORM_WINDOWS)
 typedef signed __int64 LONGLONG;
 typedef unsigned __int64 ULONGLONG;
-#elif defined(PLATFORM_MAC)
+#elif defined(PLATFORM_MAC)  ||  defined(PLATFORM_IOS)
+typedef signed long long LONGLONG;
+typedef unsigned long long ULONGLONG;
+#elif defined(PLATFORM_ANDROID)
 typedef signed long long LONGLONG;
 typedef unsigned long long ULONGLONG;
 #elif defined(PLATFORM_LINUX)
@@ -62,10 +68,9 @@ inline TYPE Clamp(TYPE num, TYPE minNum, TYPE maxNum)
 	return (num < minNum) ? minNum : (num > maxNum) ? maxNum : num;
 }
 
-DWORD GetMilliseconds();
+uint32_t GetMilliseconds();
 void SleepMilliseconds(unsigned int milliseconds);
 
-extern void* gHInstance;
 extern bool gInAssert;
 
 #ifdef NDEBUG
@@ -84,24 +89,12 @@ class DirectoryScanner;
 class File;
 class Image;
 class IRCServer;
-class VirtualFile;
-class VirtualDrive;
-class VirtualFileHandle;
-
-class Vector2d;
-class Vector2f;
-class Vector2i;
-class Vector3f;
-class Vector3i;
-class Vector4f;
+class ZipArchive;
+class ZipEntryFile;
+class ZipEntryFileHandle;
 
 class WideString;
 
-
-bool				CheckFor98Mill();
-bool				CheckForVista();
-bool				CheckForTabletPC();
-bool				AllowAllAccess(const AnsiString& theFileName);
 
 } // namespace Misc
 

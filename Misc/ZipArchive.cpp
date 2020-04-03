@@ -13,6 +13,7 @@
 #include "ZipArchive.h"
 #include "DiskFile.h"
 #include "ZipEntryFile.h"
+#include "FileUtilities.h"
 #include <time.h>
 #include "zlib.h"
 #include <assert.h>
@@ -107,7 +108,7 @@ int PathCreate(const char* inPath)
       colonPtr = pathPtr - 1;
       isDriveLetter = colonPtr == (path + 1)  &&  *colonPtr == ':';
       if (!isDriveLetter) {
-        if (!CreateDirectory(path, NULL)  &&  GetLastError() != ERROR_ALREADY_EXISTS)
+        if (!CreateDirectoryA(path, NULL)  &&  GetLastError() != ERROR_ALREADY_EXISTS)
           return 0;
       }
       *pathPtr++ = '\\';
@@ -319,8 +320,8 @@ static uint32_t ConvertTime_tToDosTime(time_t time)
 static time_t ConvertDosDateToTime_t(uint32_t dosDate)
 {
 	struct tm atm;
-    ULONG uDate;
-    uDate = (ULONG)(dosDate>>16);
+    unsigned long uDate;
+    uDate = (unsigned long)(dosDate>>16);
     atm.tm_mday = (unsigned int)(uDate&0x1f);
     atm.tm_mon =  (unsigned int)(((uDate&0x1E0)/0x20)-1);
     atm.tm_year = (unsigned int)(((uDate&0x0FE00)/0x0200)+1980)-1900;
@@ -379,6 +380,10 @@ inline int SwapEndian(int val)
 }
 
 
+inline ptrdiff_t RoundUp(ptrdiff_t num, size_t align)
+{
+	return (num + align - 1) & ~(align - 1);
+}
 
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -514,9 +519,7 @@ ZipArchive::ZipArchive() :
 	m_fileEntryMaxCount(0),
 	m_dirOffset(0xffffffff),
 	m_dirSize(0),
-	m_needsPack(false),
-	m_readOnly(false),
-	m_unused(0),
+	m_stuff(0),
 	m_filename(NULL),
 	m_fileEntryOffsets(NULL),
 	m_fileEntries(NULL),
@@ -524,10 +527,8 @@ ZipArchive::ZipArchive() :
 	m_fileEntriesMaxSizeBytes(0),
 	m_parentFile(NULL),
 	m_ownParentFile(false),
-	m_changed(false),
 	m_curWriteFile(NULL),
-	m_headOpenFile(NULL),
-	m_swap(false)
+	m_headOpenFile(NULL)
 {
 //	prng_init(entropy_fun, rng);                /* initialise RNG   */
 } // ZipArchive()
@@ -830,7 +831,7 @@ bool ZipArchive::Open(File& parentFile, const char* filename, bool readOnly, uin
 		}
 
         m_fileEntryOffsets[i] = totalSize;
-		totalSize += sizeof(ZipEntryInfo) + zipFileHeader->size_filename;
+		totalSize = (uint32_t)RoundUp(totalSize + sizeof(ZipEntryInfo) + zipFileHeader->size_filename, sizeof(void*));
 		zipDirPtr += sizeof(ZipFileHeader) + zipFileHeader->size_filename + zipFileHeader->size_file_extra + zipFileHeader->size_file_comment;
 	}
 	zipDirPtr = zipDirBuffer;
@@ -859,7 +860,7 @@ bool ZipArchive::Open(File& parentFile, const char* filename, bool readOnly, uin
 
 		this->fileNameMap[PtrString(this, i)] = i;
 
-		fileEntryPtr += sizeof(ZipEntryInfo) + stringLen;
+		fileEntryPtr = (uint8_t*)RoundUp((ptrdiff_t)fileEntryPtr + sizeof(ZipEntryInfo) + zipFileHeader->size_filename, sizeof(void*));
 
 #if ZIPARCHIVE_MD5_SUPPORT
 		bool setMD5 = false;
@@ -1201,7 +1202,10 @@ bool ZipArchive::Flush(const FlushOptions* flushOptions)
 	m_dirSize = directorySize;
 
 	_WriteDirectory(m_dirOffset, m_dirOffset + directorySize);
-	m_parentFile->SetLength(m_dirOffset + directorySize + sizeof(ZipDirHeader));
+	if (m_parentFile->GetLength() != m_dirOffset + directorySize + sizeof(ZipDirHeader))
+	{
+		m_parentFile->SetLength(m_dirOffset + directorySize + sizeof(ZipDirHeader));
+	}
 
 	// Reset to no changes.
 	m_changed = false;
@@ -1665,7 +1669,7 @@ bool ZipArchive::FileClose(ZipEntryFileHandle& fileHandle)
 			int err;
 			do
 			{
-				ULONG uTotalOutBefore;
+				unsigned long uTotalOutBefore;
 				if (fileHandle.detail->stream.avail_out == 0)
 				{
 					m_parentFile->Seek(fileHandle.detail->curCompressedFilePosition + fileEntry->m_offset + fileHandle.detail->headerSize);
@@ -1975,9 +1979,9 @@ int64_t ZipArchive::FileSeek(ZipEntryFileHandle& fileHandle, int64_t offset, Fil
 				if (this->defaultPassword.Length() > 0)
 					CORE_ASSERT(0);
 #endif // ZIPARCHIVE_ENCRYPTION
-				if (offset > 0  ||  (int64_t)fileHandle.detail->curUncompressedFilePosition + offset < 0)
+				if (offset > 0  ||  (int64_t)fileEntry->m_uncompressedSize + offset < 0)
 					return -1;
-				fileHandle.detail->curUncompressedFilePosition = fileHandle.detail->curCompressedFilePosition = fileEntry->m_uncompressedSize - offset;
+				fileHandle.detail->curUncompressedFilePosition = fileHandle.detail->curCompressedFilePosition = fileEntry->m_uncompressedSize + offset;
 				break;
 		}
 	}
@@ -2066,7 +2070,7 @@ uint64_t ZipArchive::FileRead(ZipEntryFileHandle& fileHandle, void* buffer, uint
 				stream.avail_in = (unsigned int)uReadThis;
 			}
 
-			ULONG uTotalOutBefore = stream.total_out;
+			unsigned long uTotalOutBefore = stream.total_out;
 
 			int err = inflate(&stream, Z_SYNC_FLUSH);
 
@@ -2248,10 +2252,12 @@ uint64_t ZipArchive::FileWrite(ZipEntryFileHandle& fileHandle, const void* buffe
     ZipEntryInfo* fileEntry = GetFileEntry(fileHandle.detail->fileEntryIndex);
 
 	fileEntry->m_crc = crc32(fileEntry->m_crc, (uint8_t*)buffer, (uInt)count);
+#if ZIPARCHIVE_MD5_SUPPORT
 	if (m_flags & SUPPORT_MD5)
 	{
 		MD5Update(&fileHandle.detail->md5writecontext, (unsigned char*)buffer, (unsigned int)count);
 	}
+#endif // ZIPARCHIVE_MD5_SUPPORT
 
 	if (fileEntry->m_compressionMethod == UNCOMPRESSED)
 	{
@@ -2313,7 +2319,7 @@ uint64_t ZipArchive::FileWrite(ZipEntryFileHandle& fileHandle, const void* buffe
 				stream.next_out = fileHandle.detail->bufferedData;
 			}
 
-			ULONG uTotalOutBefore = stream.total_out;
+			unsigned long uTotalOutBefore = stream.total_out;
 			err = deflate(&stream, Z_NO_FLUSH);
 			fileHandle.detail->posInBufferedData += (unsigned int)(stream.total_out - uTotalOutBefore);
 		}
@@ -2623,13 +2629,7 @@ bool ZipArchive::FileCopy(File& srcFile, const char* destFilename, int compressi
 	unsigned int fileSize = (unsigned int)(srcFile.GetLength() - srcFile.GetPosition());
 
 	// Operate in an appropriate buffer size for the compressor.
-	unsigned int BUFFER_SIZE;
-	switch (compressionMethod)
-	{
-		default:
-			BUFFER_SIZE = 64 * 1024;
-			break;
-	}
+	unsigned int BUFFER_SIZE = 64 * 1024;
 
 	// Allocate the buffer space.
 	uint8_t* buffer = new uint8_t[BUFFER_SIZE];
@@ -2735,7 +2735,11 @@ bool ZipArchive::BufferCopy(const void* buffer, uint64_t size, ZipEntryFileHandl
 
 		cacheFileName = MakeCacheFilename(this->fileCache, digest, entry->GetCompressionMethod(), 0);
 
+#if defined(_MSC_VER)
+		if (_access(cacheFileName, 0) != -1)
+#else
 		if (access(cacheFileName, 0) != -1)
+#endif // _MSC_VER
 		{
 			ZipArchive cacheDrive;
 			if (cacheDrive.Open(cacheFileName))
@@ -2838,7 +2842,11 @@ bool ZipArchive::BufferCopy(const void* buffer, uint64_t size, const char* destF
 
 		cacheFileName = MakeCacheFilename(this->fileCache, digest, _compressionMethod, 0);
 
+#if defined(_MSC_VER)
+		if (_access(cacheFileName, 0) != -1)
+#else
 		if (access(cacheFileName, 0) != -1)
+#endif // _MSC_VER
 		{
 			ZipArchive cacheDrive;
 			if (cacheDrive.Open(cacheFileName))
@@ -3185,17 +3193,8 @@ bool ZipArchive::Pack(PackOptions* packOptions)
 	HeapString oldArchiveFileName = m_filename;
 	Close();
 
-#if defined(_MSC_VER)
 	// Copy the packed drive.
-	unlink(oldArchiveFileName);
-	if (!::MoveFile(newFileName, oldArchiveFileName))
-		::CopyFile(newFileName, oldArchiveFileName, false);
-
-	_unlink(newFileName);
-#else
-	assert(0);
-	unlink(newFileName);
-#endif
+	FileUtilities::FileMove(newFileName, oldArchiveFileName);
 
 	this->m_needsPack = false;
 
@@ -3214,9 +3213,7 @@ time_t ConvertFILETIME_To_time_t(const FILETIME& fileTime)
 	FileTimeToSystemTime(&fileTime, &universalSystemTime);
 
 	SYSTEMTIME sysTime;
-	if (CheckFor98Mill()) {
-		CORE_ASSERT(0);
-	} else {
+	{
 		if (!fnSystemTimeToTzSpecificLocalTime) {
 			HMODULE aLib = LoadLibraryA("kernel32.dll");
 			if (aLib == NULL)
@@ -3366,7 +3363,13 @@ bool ZipArchive::ProcessFileList(ZipArchive::FileOrderList& fileOrderList, Proce
 					|| memcmp(fileOrderInfo.md5, emptyMD5, sizeof(emptyMD5)) == 0
 #endif // ZIPARCHIVE_MD5_SUPPORT
 				) {
-				ZipArchive* openArchive = fileOrderInfo.sourceArchive ? fileOrderInfo.sourceArchive : PFL_OpenArchive(archiveFileName, openArchives, SUPPORT_MD5);
+                ZipArchive* openArchive = fileOrderInfo.sourceArchive ? fileOrderInfo.sourceArchive : PFL_OpenArchive(archiveFileName, openArchives
+#if ZIPARCHIVE_MD5_SUPPORT
+                    , SUPPORT_MD5
+#else
+                    , 0
+#endif // ZIPARCHIVE_MD5_SUPPORT
+                    );
 				openArchiveFileEntry = openArchive->FindFileEntry(entryName);
 			}
 
@@ -3413,7 +3416,7 @@ bool ZipArchive::ProcessFileList(ZipArchive::FileOrderList& fileOrderList, Proce
 			}
 			// Otherwise, grab the information from the file on disk and assign it to tentatively
 			// need updating.
-			else if (GetFileAttributesEx(fileOrderInfo.srcPath, GetFileExInfoStandard, &fd)) {
+			else if (GetFileAttributesExA(fileOrderInfo.srcPath, GetFileExInfoStandard, &fd)) {
 				fileOrderInfo.lastWriteTime = ConvertFILETIME_To_time_t(fd.ftLastWriteTime);
 				fileOrderInfo.size = fd.nFileSizeLow;
 				fileOrderInfo.needUpdate = true;
@@ -3482,7 +3485,9 @@ bool ZipArchive::ProcessFileList(ZipArchive::FileOrderList& fileOrderList, Proce
 			// Set the start of the .zip file contents to be after the directory
 			// at the beginning.
 			if (!options->checkOnly) {
-				GetParentFile()->SetLength(initialOffset);
+				if (m_dirOffset != initialOffset) {
+					GetParentFile()->SetLength(initialOffset);
+				}
 			}
 			m_dirOffset = initialOffset;
 		} else if (lowestFileOffset != initialOffset) {
@@ -3818,7 +3823,13 @@ bool ZipArchive::ProcessFileList(ZipArchive::FileOrderList& fileOrderList, Proce
 				archiveFileName = info.srcPath.Sub(0, pipePos);
 				entryName = info.srcPath.Sub(pipePos + 1);
 			}
-			ZipArchive* sourceArchive = info.sourceArchive ? info.sourceArchive : PFL_OpenArchive(archiveFileName, openArchives, SUPPORT_MD5);
+			ZipArchive* sourceArchive = info.sourceArchive ? info.sourceArchive : PFL_OpenArchive(archiveFileName, openArchives
+#if ZIPARCHIVE_MD5_SUPPORT
+                , SUPPORT_MD5
+#else
+                , 0
+#endif // ZIPARCHIVE_MD5_SUPPORT
+                );
 			if (sourceArchive) {
 				size_t sourceFileEntryIndex = sourceArchive->FindFileEntryIndex(entryName);
 				if (sourceFileEntryIndex == INVALID_FILE_ENTRY)
@@ -3916,11 +3927,19 @@ bool ZipArchive::ProcessFileList(ZipArchive::FileOrderList& fileOrderList, Proce
 							cacheFileName = MakeCacheFilename(networkCache, info.md5, info.compressionMethod, 0);
 
 							// Does the compressed exist in the network cache?
+#if defined(_MSC_VER)
+							if (_access(cacheFileName, 0) != -1) {
+#else
 							if (access(cacheFileName, 0) != -1) {
+#endif // _MSC_VER
 								// It appears so.  Try and open it.  Compressed network cache entries are
 								// stored as single file entry zips.
 								ZipArchive cacheArchive;
-								if (cacheArchive.Open(cacheFileName, true, SUPPORT_MD5)) {
+								if (cacheArchive.Open(cacheFileName, true
+#if ZIPARCHIVE_MD5_SUPPORT
+									, SUPPORT_MD5
+#endif // ZIPARCHIVE_MD5_SUPPORT
+                                    )) {
 									// The zip archive opened successfully.  Now try the file entry itself.
 									ZipEntryFileHandle cacheFileHandle;
 									if (cacheArchive.FileOpenIndex(0, cacheFileHandle)) {
@@ -3982,7 +4001,11 @@ bool ZipArchive::ProcessFileList(ZipArchive::FileOrderList& fileOrderList, Proce
 
 								// Create a single file zip archive at the network cache location.
 								ZipArchive cacheArchive;
-								if (cacheArchive.Create(cacheFileName, SUPPORT_MD5)) {
+								if (cacheArchive.Create(cacheFileName
+#if ZIPARCHIVE_MD5_SUPPORT
+									, SUPPORT_MD5
+#endif // ZIPARCHIVE_MD5_SUPPORT
+									)) {
 									// Open the zip entry we just compressed.
 									ZipEntryFileHandle srcFileHandle;
 									if (activeArchive->FileOpen(info.entryName, srcFileHandle)) {
@@ -4077,11 +4100,19 @@ bool ZipArchive::ProcessFileList(ZipArchive::FileOrderList& fileOrderList, Proce
 			cacheFileName = MakeCacheFilename(networkCache, info.md5, info.compressionMethod, 0);
 
 			// Does the compressed exist in the network cache?
+#if defined(_MSC_VER)
+			if (_access(cacheFileName, 0) != -1) {
+#else
 			if (access(cacheFileName, 0) != -1) {
+#endif // _MSC_VER
 				// It appears so.  Try and open it.  Compressed network cache entries are
 				// stored as single file entry zips.
 				ZipArchive cacheArchive;
-				if (cacheArchive.Open(cacheFileName, true, SUPPORT_MD5)) {
+				if (cacheArchive.Open(cacheFileName, true
+#if ZIPARCHIVE_MD5_SUPPORT
+					, SUPPORT_MD5
+#endif // ZIPARCHIVE_MD5_SUPPORT
+					)) {
 					// The zip archive opened successfully.  Now try the file entry itself.
 					ZipEntryFileHandle cacheFileHandle;
 					if (cacheArchive.FileOpenIndex(0, cacheFileHandle)) {
@@ -4157,7 +4188,11 @@ bool ZipArchive::ProcessFileList(ZipArchive::FileOrderList& fileOrderList, Proce
 
 			// Create a single file zip archive at the network cache location.
 			ZipArchive cacheArchive;
-			if (cacheArchive.Create(cacheFileName, SUPPORT_MD5)) {
+			if (cacheArchive.Create(cacheFileName
+#if ZIPARCHIVE_MD5_SUPPORT
+				, SUPPORT_MD5
+#endif // ZIPARCHIVE_MD5_SUPPORT
+				)) {
 				// Open the zip entry we just compressed.
 				ZipEntryFileHandle srcFileHandle;
 				if (activeArchive->FileOpen(info.entryName, srcFileHandle)) {
@@ -4193,21 +4228,8 @@ bool ZipArchive::ProcessFileList(ZipArchive::FileOrderList& fileOrderList, Proce
 		m_needsPack = false;
 		Close();
 
-#if defined(_WIN32)
-		// Copy the packed drive.
-		unlink(oldArchiveFileName);
-		if (!::MoveFile(newArchiveFileName, oldArchiveFileName))
-			::CopyFile(newArchiveFileName, oldArchiveFileName, false);
-
-		_unlink(newArchiveFileName);
-#elif defined(macintosh)  ||  defined(__APPLE__)
-		int ret = copyfile(newArchiveFileName, oldArchiveFileName, NULL, COPYFILE_ALL | COPYFILE_MOVE);
-		int err = errno;
-		unlink(newArchiveFileName);
-#else
-		assert(0);
-		unlink(newArchiveFileName);
-#endif
+		// Copy the packed archive.
+		FileUtilities::FileMove(newArchiveFileName, oldArchiveFileName);
 
 		// Open it with the new
 		if (options->reopenWhenDone) {

@@ -13,10 +13,10 @@ namespace Misc {
 
 #define ROUND(x,y) (((x)+(y-1))&~(y-1))
 #define ROUND4(x) ROUND(x, 4)
-static FixedSizeAllocator poolAnsiAllocator64(ROUND4(65*sizeof(char)+12), 100);
-static FixedSizeAllocator poolAnsiAllocator128(ROUND4(129*sizeof(char)+12), 100);
-static FixedSizeAllocator poolAnsiAllocator256(ROUND4(257*sizeof(char)+12), 100);
-static FixedSizeAllocator poolAnsiAllocator512(ROUND4(513*sizeof(char)+12), 100);
+static FixedSizeAllocator poolAnsiAllocator64(ROUND4(65*sizeof(char)+sizeof(AnsiStringData)), 100);
+static FixedSizeAllocator poolAnsiAllocator128(ROUND4(129*sizeof(char)+sizeof(AnsiStringData)), 100);
+static FixedSizeAllocator poolAnsiAllocator256(ROUND4(257*sizeof(char)+sizeof(AnsiStringData)), 100);
+static FixedSizeAllocator poolAnsiAllocator512(ROUND4(513*sizeof(char)+sizeof(AnsiStringData)), 100);
 
 void AnsiStringData::Free()
 {
@@ -30,7 +30,7 @@ void AnsiStringData::Free()
         poolAnsiAllocator512.Free(this);
     else
     {
-        assert(this->maxSize > 512);
+//        assert(this->maxSize > 512);
         delete[] (unsigned char*)this;
     }
 }
@@ -64,6 +64,10 @@ AnsiString AnsiString::Format(const char* format, ...)
 
 	int len = 0;
 	trio_vcprintf(CountAnsiStream, &len, format, args);
+
+	va_end(args);
+	va_start(args, format);
+
 
 	AnsiString dest;
 	dest.AllocBuffer(len);

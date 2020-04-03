@@ -1,29 +1,8 @@
 {
 
 local PCH_SRCS =
-		AnsiString.cpp
-		AnsiString.h
-		Array.h
-		DiskFile.cpp
-		DiskFile.h
-		File.h
-		FixedSizeAllocator.h
-		HeapAllocator.h
-		HeapString.cpp
-		HeapString.h
-		List.h
-		Map.h
-		MemFile.cpp
-		MemFile.h
-		Misc.cpp
-		Misc.h
-		Misc_InternalPch.h
-		OwnedPtr.h
-		TypeTraits.h
-		ZipArchive.cpp
-		ZipArchive.h
-		ZipEntryFile.cpp
-		ZipEntryFile.h
+		*.cpp
+		*.h
 ;
 
 local AES_SRCS =

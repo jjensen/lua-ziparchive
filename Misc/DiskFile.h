@@ -30,11 +30,15 @@ public:
 
 private:
     char* m_fileName;
-#if defined(_WIN32)
+#if USE_SDL
+	void* m_fileHandle;
+#else
+#if defined(PLATFORM_WINDOWS)
     void* m_fileHandle;
 #else
 	int m_fileHandle;
 #endif
+#endif // USE_SDL
 };
 
 } // namespace Misc

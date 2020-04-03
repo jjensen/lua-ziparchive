@@ -19,9 +19,9 @@ public:
 	static void DestructElements(T* element, size_t count)				{  (void)element;  while (count--)  (element++)->~T();  }
 	static void CopyElements(T* dest, const T* src, size_t count)		{  while (count--)  *dest++ = *src++;  }
 
-	static void RelocateElements(T* dest, T* src, size_t count)			{  memmove(dest, src, count * sizeof(T));  }
-	static void CopyConstructElements(T* dest, T* src, size_t count)	{  memmove(dest, src, count * sizeof(T));  }
-	static size_t Hash(const T& element)								{  return (unsigned int)element;  }
+	static void RelocateElements(T* dest, T* src, size_t count)			{  memmove((void*)dest, (void*)src, count * sizeof(T));  }
+	static void CopyConstructElements(T* dest, T* src, size_t count)	{  memmove((void*)dest, (void*)src, count * sizeof(T));  }
+	static size_t Hash(const T& element)								{  return (size_t)element;  }
 	static bool CompareElements(const T& element1, const T& element2)	{  return element1 == element2;  }
 	static int CompareElementsOrdered(const T& element1, const T& element2)  {  return element1 < element2 ? -1 : (element1 == element2 ? 0 : 1);  }
 };
@@ -41,8 +41,8 @@ public:
 	static void ConstructElements(T* element, INARGTYPE src, size_t count)  {  while (count--)  *element = src;  }
 	static void DestructElements(T*, size_t)								{  }
 	static void CopyElements(T* dest, const T* src, size_t count)			{  memcpy(dest, src, count * sizeof(T));  }
-	static void RelocateElements(T* dest, T* src, size_t count)				{  memmove(dest, src, count * sizeof(T));  }
-	static void CopyConstructElements(T* dest, T* src, size_t count)		{  memmove(dest, src, count * sizeof(T));  }
+	static void RelocateElements(T* dest, T* src, size_t count)				{  memmove((void*)dest, (void*)src, count * sizeof(T));  }
+	static void CopyConstructElements(T* dest, T* src, size_t count)		{  memmove((void*)dest, (void*)src, count * sizeof(T));  }
 };
 
 template<> class TypeTraits<unsigned char> : public PrimitiveTypeTraits<unsigned char> {};

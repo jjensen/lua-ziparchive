@@ -1,6 +1,6 @@
 /*************************************************************************
  *
- * $Id: triop.h,v 1.15 2005/03/24 15:43:03 breese Exp $
+ * $Id: triop.h,v 1.19 2010/09/12 11:08:08 breese Exp $
  *
  * Copyright (C) 2000 Bjorn Reese and Daniel Stenberg.
  *
@@ -130,6 +130,16 @@ extern "C" {
 # define TRIO_EXTENSION 1
 #endif
 
+/*
+ * TRIO_DEPRECATED (=0 or =1)
+ *
+ * Define this to 0 to disable deprecated functionality, or define
+ * to 1 to enable them.
+ */
+#if !defined(TRIO_DEPRECATED)
+# define TRIO_DEPRECATED 1
+#endif
+
 /*************************************************************************
  * Features
  */
@@ -141,14 +151,12 @@ extern "C" {
 # define TRIO_FEATURE_FD 0
 # define TRIO_FEATURE_DYNAMICSTRING 0
 # define TRIO_FEATURE_CLOSURE 0
+# define TRIO_FEATURE_ARGFUNC 0
 # define TRIO_FEATURE_STRERR 0
 # define TRIO_FEATURE_LOCALE 0
 # define TRIO_EMBED_NAN 1
 # define TRIO_EMBED_STRING 1
 #endif
-
-#undef TRIO_FEATURE_CLOSURE
-# define TRIO_FEATURE_CLOSURE 1
   
 /*
  * TRIO_FEATURE_SCANF (=0 or =1)
@@ -223,6 +231,29 @@ extern "C" {
  * These functions are rarely needed. This saves a (small) amount of code.
  */
 #if !defined(TRIO_FEATURE_CLOSURE)
+# define TRIO_FEATURE_CLOSURE 1
+#endif
+
+/*
+ * TRIO_FEATURE_ARGFUNC (=0 or =1)
+ *
+ * Define this to 0 to disable compilation of trio_cprintff() and
+ * trio_cscanff() functions and related code (might have a tiny
+ * performance gain), or define to 1 to enable them.
+ *
+ * This functionality is needed only if you have to fetch the arguments using
+ * a pull model instead of passing them all at once (for example if you plan
+ * to plug the library into a script interpreter or validate the types).
+ *
+ * Only the closure family of functions are available with this interface,
+ * because if you need this, you usually provide custom input/output
+ * handling too (and so this forces TRIO_FEATURE_CLOSURE to enabled).
+ */
+#if !defined(TRIO_FEATURE_ARGFUNC)
+# define TRIO_FEATURE_ARGFUNC 1
+#endif
+#if TRIO_FEATURE_ARGFUNC
+# undef TRIO_FEATURE_CLOSURE
 # define TRIO_FEATURE_CLOSURE 1
 #endif
 
@@ -397,7 +428,7 @@ trio_pointer_t trio_register TRIO_PROTO((trio_callback_t callback, const char *n
 void trio_unregister TRIO_PROTO((trio_pointer_t handle));
 
 TRIO_CONST char *trio_get_format TRIO_PROTO((trio_pointer_t ref));
-trio_pointer_t trio_get_argument TRIO_PROTO((trio_pointer_t ref));
+TRIO_CONST trio_pointer_t trio_get_argument TRIO_PROTO((trio_pointer_t ref));
 
 /* Modifiers */
 int  trio_get_width TRIO_PROTO((trio_pointer_t ref));
@@ -422,7 +453,7 @@ int  trio_get_alternative TRIO_PROTO((trio_pointer_t ref)); /* # */
 void trio_set_alternative TRIO_PROTO((trio_pointer_t ref, int is_alternative));
 int  trio_get_alignment TRIO_PROTO((trio_pointer_t ref)); /* - */
 void trio_set_alignment TRIO_PROTO((trio_pointer_t ref, int is_leftaligned));
-int  trio_get_spacing TRIO_PROTO((trio_pointer_t ref)); /*  TRIO_PROTO((space) */
+int  trio_get_spacing TRIO_PROTO((trio_pointer_t ref)); /* (space) */
 void trio_set_spacing TRIO_PROTO((trio_pointer_t ref, int is_space));
 int  trio_get_sign TRIO_PROTO((trio_pointer_t ref)); /* + */
 void trio_set_sign TRIO_PROTO((trio_pointer_t ref, int is_showsign));
@@ -455,7 +486,7 @@ void trio_print_uint TRIO_PROTO((trio_pointer_t ref, unsigned int number));
 /*  void trio_print_long TRIO_PROTO((trio_pointer_t ref, long number)); */
 /*  void trio_print_ulong TRIO_PROTO((trio_pointer_t ref, unsigned long number)); */
 void trio_print_double TRIO_PROTO((trio_pointer_t ref, double number));
-void trio_print_string TRIO_PROTO((trio_pointer_t ref, char *string));
+void trio_print_string TRIO_PROTO((trio_pointer_t ref, TRIO_CONST char *string));
 void trio_print_pointer TRIO_PROTO((trio_pointer_t ref, trio_pointer_t pointer));
 
 #ifdef __cplusplus

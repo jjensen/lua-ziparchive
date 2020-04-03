@@ -41,7 +41,7 @@ public:
 	FixedSizeAllocator() :
 		m_freeNode(0),
 		m_pages(0),
-		m_allocSize(4),
+		m_allocSize(sizeof(void*)),
 		m_blockSize(10)
 	{
 	}
@@ -51,7 +51,7 @@ public:
 		assert(allocSize >= sizeof(Node));
 		assert(blockSize > 1);
 
-		m_allocSize = allocSize;
+		m_allocSize = allocSize > sizeof(void*) ? allocSize : sizeof(void*);
 		m_blockSize = blockSize;
 		m_freeNode = 0;
 		m_pages = 0;

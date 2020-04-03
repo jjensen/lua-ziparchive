@@ -1,13 +1,21 @@
 #include "Misc_InternalPch.h"
 
-#if defined(_WIN32)
+#if defined(PLATFORM_WINDOWS)
 #include <windows.h>
+#if !SHIP
 #pragma comment(lib, "winmm.lib")
-#elif defined(__APPLE__)
+#undef GetClassInfo
+#endif // SHIP
+#elif defined(PLATFORM_MAC)
 #include <CoreServices/CoreServices.h>
+#import <Cocoa/Cocoa.h>
 #include <unistd.h>
 #include <sys/time.h>
-#endif // _WIN32
+#elif defined(PLATFORM_IOS)
+#include <QuartzCore/QuartzCore.h>
+#elif defined(PLATFORM_ANDROID)
+#include <SDL.h>
+#endif // PLATFORM_WINDOWS
 
 #include <stdio.h>
 #include <assert.h>
@@ -19,97 +27,37 @@ namespace Misc {
 
 bool gInAssert = false;	
 
-DWORD GetMilliseconds()
+uint32_t GetMilliseconds()
 {
-#if defined(_WIN32)
+#if defined(PLATFORM_WINDOWS)
 	return ::timeGetTime();
 #endif
 #if defined(PLATFORM_MAC)
 	timeval time;
 	gettimeofday(&time, NULL);
 	return (time.tv_sec * 1000) + (time.tv_usec / 1000);
-#endif // _WIN32
+#endif // PLATFORM_WINDOWS
+#if defined(PLATFORM_IOS)
+	CFTimeInterval timeInterval = CACurrentMediaTime();
+	return (uint32_t)(timeInterval * 1000);
+#endif // PLATFORM_WINDOWS
+#if defined(PLATFORM_ANDROID)
+	return SDL_GetTicks();
+#endif // PLATFORM_ANDROID
+	CORE_ASSERT(0);
 }
 
 
 void SleepMilliseconds(unsigned int milliseconds)
 {
-#if defined(_WIN32)
+#if defined(PLATFORM_WINDOWS)
 	::Sleep(milliseconds);
-#elif defined(PLATFORM_MAC)
+#elif defined(PLATFORM_MAC)  ||  defined(PLATFORM_IOS)
 	usleep(milliseconds * 1000);
+#elif defined(PLATFORM_ANDROID)
+	SDL_Delay(milliseconds);
 #endif
 }
 
-#if defined(_WIN32)
-
-bool CheckFor98Mill()
-{
-	static bool needOsCheck = true;
-	static bool is98Mill = false;
-
-	if (needOsCheck)
-	{
-		bool invalid = false;
-		OSVERSIONINFOEXA osvi;
-		ZeroMemory(&osvi, sizeof(OSVERSIONINFOEXA));
-
-		osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEXA);
-		if( GetVersionExA((LPOSVERSIONINFOA)&osvi) == 0)
-		{
-			osvi.dwOSVersionInfoSize = sizeof (OSVERSIONINFOA);
-			if ( GetVersionExA((LPOSVERSIONINFOA)&osvi) == 0)
-				return false;
-		}
-
-		needOsCheck = false;
-		is98Mill = osvi.dwPlatformId == VER_PLATFORM_WIN32_WINDOWS; // let's check Win95, 98, *AND* ME.
-	}
-
-	return is98Mill;
-}
-
-bool CheckForVista()
-{
-	static bool needOsCheck = true;
-	static bool isVista = false;
-
-	if (needOsCheck)
-	{
-		bool invalid = false;
-		OSVERSIONINFOEXA osvi;
-		ZeroMemory(&osvi, sizeof(OSVERSIONINFOEXA));
-
-		osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEXA);
-		if( GetVersionExA((LPOSVERSIONINFOA)&osvi) == 0)
-		{
-			osvi.dwOSVersionInfoSize = sizeof (OSVERSIONINFOA);
-			if ( GetVersionExA((LPOSVERSIONINFOA)&osvi) == 0)
-				return false;
-		}
-
-		needOsCheck = false;
-		isVista = osvi.dwMajorVersion >= 6;
-	}
-
-	return isVista;
-}
-
-bool CheckForTabletPC()
-{
-	static bool needsCheck = true;
-	static bool isTabletPC = false;
-
-	if (needsCheck)
-	{
-		isTabletPC = GetSystemMetrics(86) != 0; // check for tablet pc
-		needsCheck = false;
-	}
-
-	return isTabletPC;
-}
-
-
-#endif // _WIN32
 
 } // namespace Misc
